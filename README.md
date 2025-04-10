@@ -5,10 +5,10 @@ A simple project to learn Zig, that aims to resolve the problem that hunts me si
 Don't expect to be good, I'm just a girl. (not really but yeah)
 
 ## Core Features
-- [ ] Support string clipboards
-- [ ] List the last 10 clipboard items
+- [x] Support string clipboards
+- [x] List the last 10 clipboard items
 - [ ] Add to the list when something is copied
-- [ ] Paste the last clipboard item
+- [x] Paste the last clipboard item
 	- [ ] Paste any clipboard item
 - [ ] Clear the clipboard
 
