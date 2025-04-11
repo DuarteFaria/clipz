@@ -24,7 +24,8 @@ pub const ClipboardUI = struct {
         const stdin = std.io.getStdIn();
         var buffer: [1024]u8 = undefined;
 
-        std.debug.print("Clipboard Manager - Interactive Mode\n", .{});
+        std.debug.print("\x1B[2J\x1B[H", .{});
+        std.debug.print("Clipz - Interactive Mode\n", .{});
         printHelp();
         std.debug.print("\n", .{});
 
@@ -45,7 +46,6 @@ pub const ClipboardUI = struct {
                         std.debug.print("Goodbye!\n", .{});
                         break;
                     },
-                    .set => std.debug.print("Set command not implemented yet\n", .{}),
                     .get_index => {
                         const index_str = trimmed["get ".len..];
                         const index = std.fmt.parseInt(usize, index_str, 10) catch {
@@ -62,6 +62,9 @@ pub const ClipboardUI = struct {
                             std.debug.print("No entry at index {d}\n", .{index});
                         }
                         continue;
+                    },
+                    .help => {
+                        printHelp();
                     },
                     .unknown => {
                         std.debug.print("Unknown command.\n", .{});
