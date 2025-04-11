@@ -24,6 +24,8 @@ pub const ClipboardManager = struct {
     allocator: std.mem.Allocator,
     max_entries: usize,
     last_content: ?[]const u8,
+    monitor_thread: ?std.Thread = null,
+    should_monitor: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     pub fn init(allocator: std.mem.Allocator, max_entries: usize) ClipboardManager {
         return .{
@@ -35,6 +37,7 @@ pub const ClipboardManager = struct {
     }
 
     pub fn deinit(self: *ClipboardManager) void {
+        self.stopMonitoring();
         for (self.entries.items) |entry| {
             entry.free(self.allocator);
         }
@@ -66,14 +69,15 @@ pub const ClipboardManager = struct {
         self.last_content = try self.allocator.dupe(u8, content);
 
         ui.printEntries(self);
+        std.debug.print("> ", .{});
     }
 
     pub fn getEntries(self: *const ClipboardManager) []const ClipboardEntry {
         return self.entries.items;
     }
 
-    pub fn monitor(self: *ClipboardManager) !void {
-        while (true) {
+    fn monitorThread(self: *ClipboardManager) !void {
+        while (self.should_monitor.load(.acquire)) {
             const content = clipboard.getContent(self.allocator) catch |err| switch (err) {
                 clipboard.ClipboardError.NoClipboardContent => continue,
                 clipboard.ClipboardError.CommandFailed => continue,
@@ -82,7 +86,26 @@ pub const ClipboardManager = struct {
             defer self.allocator.free(content);
 
             try self.addEntry(content);
-            std.time.sleep(1 * std.time.ns_per_s); // Check every second
+            std.time.sleep(1000 * std.time.ns_per_ms);
+        }
+    }
+
+    pub fn startMonitoring(self: *ClipboardManager) !void {
+        if (self.monitor_thread != null) return;
+
+        self.should_monitor.store(true, .release);
+        self.monitor_thread = try std.Thread.spawn(.{}, monitorThread, .{self});
+        std.debug.print("\nMonitoring clipboard in background...\n", .{});
+        std.debug.print("> ", .{});
+    }
+
+    pub fn stopMonitoring(self: *ClipboardManager) void {
+        if (self.monitor_thread) |thread| {
+            self.should_monitor.store(false, .release);
+            thread.join();
+            self.monitor_thread = null;
+            std.debug.print("> ", .{});
+            std.debug.print("\nStopped monitoring clipboard.\n", .{});
         }
     }
 

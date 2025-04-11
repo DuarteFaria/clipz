@@ -13,12 +13,13 @@ pub const ClipboardUI = struct {
 
     fn printHelp() void {
         std.debug.print("Commands:\n", .{});
-        std.debug.print("  get       - Show all clipboard entries\n", .{});
-        std.debug.print("  get <n>   - Show specific clipboard entry\n", .{});
-        std.debug.print("  monitor   - Start monitoring clipboard\n", .{});
-        std.debug.print("  clean     - Clean the clipboard\n", .{});
-        std.debug.print("  clear     - Clear the screen\n", .{});
-        std.debug.print("  exit      - Exit the program\n", .{});
+        std.debug.print("  get           - Show all clipboard entries\n", .{});
+        std.debug.print("  get <n>       - Show specific clipboard entry\n", .{});
+        std.debug.print("  start         - Start monitoring clipboard in background\n", .{});
+        std.debug.print("  stop          - Stop monitoring clipboard\n", .{});
+        std.debug.print("  clean         - Clean the clipboard\n", .{});
+        std.debug.print("  clear         - Clear the screen\n", .{});
+        std.debug.print("  exit          - Exit the program\n", .{});
     }
 
     pub fn run(self: *ClipboardUI) !void {
@@ -38,9 +39,11 @@ pub const ClipboardUI = struct {
 
                 switch (command.Command.fromString(trimmed)) {
                     .get => printEntries(self.clipboard),
-                    .monitor => {
-                        std.debug.print("\nStarting clipboard monitor (Ctrl+C to stop)...\n", .{});
-                        try self.clipboard.monitor();
+                    .start => {
+                        try self.clipboard.startMonitoring();
+                    },
+                    .stop => {
+                        self.clipboard.stopMonitoring();
                     },
                     .clear => std.debug.print("\x1B[2J\x1B[H", .{}),
                     .clean => {
