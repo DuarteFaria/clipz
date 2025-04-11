@@ -91,4 +91,13 @@ pub const ClipboardManager = struct {
         const real_index = self.entries.items.len - index;
         return &self.entries.items[real_index];
     }
+
+    pub fn clean(self: *ClipboardManager) !void {
+        if (self.last_content) |last| {
+            self.allocator.free(last);
+        }
+
+        self.entries.clearRetainingCapacity();
+        self.last_content = null;
+    }
 };

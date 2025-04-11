@@ -16,6 +16,7 @@ pub const ClipboardUI = struct {
         std.debug.print("  get       - Show all clipboard entries\n", .{});
         std.debug.print("  get <n>   - Show specific clipboard entry\n", .{});
         std.debug.print("  monitor   - Start monitoring clipboard\n", .{});
+        std.debug.print("  clean     - Clean the clipboard\n", .{});
         std.debug.print("  clear     - Clear the screen\n", .{});
         std.debug.print("  exit      - Exit the program\n", .{});
     }
@@ -42,6 +43,11 @@ pub const ClipboardUI = struct {
                         try self.clipboard.monitor();
                     },
                     .clear => std.debug.print("\x1B[2J\x1B[H", .{}),
+                    .clean => {
+                        std.debug.print("\nCleaning clipboard...\n", .{});
+                        try self.clipboard.clean();
+                        printEntries(self.clipboard);
+                    },
                     .exit => {
                         std.debug.print("Goodbye!\n", .{});
                         break;
