@@ -7,7 +7,7 @@ Don't expect to be good, I'm just a girl. (not really but yeah)
 ## Core Features
 - [x] Support string clipboards
 - [x] List the last 10 clipboard items
-- [ ] Add to the list when something is copied
+- [x] Add to the list when something is copied
 - [x] Paste the last clipboard item
 	- [ ] Paste any clipboard item
 - [ ] Clear the clipboard
