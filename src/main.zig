@@ -1,5 +1,6 @@
 const std = @import("std");
 const manager = @import("manager.zig");
+const ui = @import("ui.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -9,5 +10,6 @@ pub fn main() !void {
     var clipboard_manager = manager.ClipboardManager.init(allocator, 10);
     defer clipboard_manager.deinit();
 
-    try clipboard_manager.interactive();
+    var clipboard_ui = ui.ClipboardUI.init(&clipboard_manager);
+    try clipboard_ui.run();
 }
