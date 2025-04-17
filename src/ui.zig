@@ -62,14 +62,7 @@ pub const ClipboardUI = struct {
                             continue;
                         };
 
-                        if (self.clipboard.getEntry(index)) |entry| {
-                            const now = std.time.timestamp();
-                            const age_secs = now - entry.timestamp;
-                            std.debug.print("\nClip {d} (from {d}s ago):\n", .{ index, age_secs });
-                            std.debug.print("{s}\n", .{entry.content});
-                        } else {
-                            std.debug.print("No entry at index {d}\n", .{index});
-                        }
+                        try self.clipboard.selectEntry(index);
                         continue;
                     },
                     .help => {
@@ -88,7 +81,7 @@ pub const ClipboardUI = struct {
 pub fn printEntries(clipboard_entries: *manager.ClipboardManager) void {
         const entries = clipboard_entries.getEntries();
 
-        std.debug.print("\x1b[2J\x1b[H", .{});
+        // std.debug.print("\x1b[2J\x1b[H", .{});
 
         std.debug.print("\nClipboard History ({d} entries):\n", .{entries.len});
         std.debug.print("----------------------------------------\n", .{});

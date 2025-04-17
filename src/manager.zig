@@ -109,10 +109,20 @@ pub const ClipboardManager = struct {
         }
     }
 
-    pub fn getEntry(self: *const ClipboardManager, index: usize) ?*const ClipboardEntry {
-        if (index == 0 or index > self.entries.items.len) return null;
+    pub fn selectEntry(self: *ClipboardManager, index: usize) !void {
+        if (index == 0 or index > self.entries.items.len) return;
+
         const real_index = self.entries.items.len - index;
-        return &self.entries.items[real_index];
+        const entry = self.entries.items[real_index];
+
+        const allocator = self.allocator;
+        try clipboard.setContent(allocator, entry.content);
+
+        const oldEntry = self.entries.orderedRemove(real_index);
+
+        std.debug.print("Removed entry: {s}\n", .{oldEntry.content});
+
+        try self.addEntry(entry.content);
     }
 
     pub fn clean(self: *ClipboardManager) !void {
