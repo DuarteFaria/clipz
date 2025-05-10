@@ -79,21 +79,21 @@ pub const ClipboardUI = struct {
 };
 
 pub fn printEntries(clipboard_entries: *manager.ClipboardManager) void {
-        const entries = clipboard_entries.getEntries();
+    const entries = clipboard_entries.getEntries();
 
-        // std.debug.print("\x1b[2J\x1b[H", .{});
+    std.debug.print("\x1b[2J\x1b[H", .{});
 
-        std.debug.print("\nClipboard History ({d} entries):\n", .{entries.len});
-        std.debug.print("----------------------------------------\n", .{});
+    std.debug.print("\nClipboard History ({d} entries):\n", .{entries.len});
+    std.debug.print("----------------------------------------\n", .{});
 
-        for (entries, 0..) |entry, i| {
-            const reversed_index = entries.len - 1 - i;
-            const timestamp = entry.timestamp;
-            const now = std.time.timestamp();
-            const age_secs = now - timestamp;
+    for (entries, 0..) |entry, i| {
+        const reversed_index = entries.len - 1 - i;
+        const timestamp = entry.timestamp;
+        const now = std.time.timestamp();
+        const age_secs = now - timestamp;
 
-            std.debug.print("\nClip {d} (from {d}s ago):\n", .{ reversed_index + 1, age_secs });
-            std.debug.print("{s}\n", .{entry.content});
-        }
-        std.debug.print("----------------------------------------\n", .{});
+        std.debug.print("\nClip {d} (from {d}s ago):\n", .{ reversed_index + 1, age_secs });
+        std.debug.print("{s}\n", .{entry.content});
     }
+    std.debug.print("----------------------------------------\n", .{});
+}

@@ -38,12 +38,14 @@ pub const ClipboardManager = struct {
 
     pub fn deinit(self: *ClipboardManager) void {
         self.stopMonitoring();
+        std.time.sleep(100 * std.time.ns_per_ms);
         for (self.entries.items) |entry| {
             entry.free(self.allocator);
         }
         self.entries.deinit();
         if (self.last_content) |content| {
             self.allocator.free(content);
+            self.last_content = null;
         }
     }
 
@@ -115,14 +117,17 @@ pub const ClipboardManager = struct {
         const real_index = self.entries.items.len - index;
         const entry = self.entries.items[real_index];
 
-        const allocator = self.allocator;
-        try clipboard.setContent(allocator, entry.content);
+        try clipboard.setContent(entry.content);
 
-        const oldEntry = self.entries.orderedRemove(real_index);
+        const selected_entry = self.entries.orderedRemove(real_index);
+        try self.entries.append(selected_entry);
 
-        std.debug.print("Removed entry: {s}\n", .{oldEntry.content});
+        if (self.last_content) |last| {
+            self.allocator.free(last);
+        }
+        self.last_content = try self.allocator.dupe(u8, entry.content);
 
-        try self.addEntry(entry.content);
+        ui.printEntries(self);
     }
 
     pub fn clean(self: *ClipboardManager) !void {

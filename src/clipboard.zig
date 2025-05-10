@@ -33,19 +33,20 @@ pub fn getContent(allocator: std.mem.Allocator) ![]const u8 {
     }
 }
 
-pub fn setContent(allocator: std.mem.Allocator, content: []const u8) !void {
+pub fn setContent(content: []const u8) !void {
     switch (builtin.os.tag) {
         .macos => {
-       		const command = try std.fmt.allocPrint(allocator, "echo \"{s}\" | pbcopy", .{content});
-         	defer allocator.free(command);
+            var script = std.ArrayList(u8).init(std.heap.page_allocator);
+            defer script.deinit();
+
+            try script.appendSlice("set the clipboard to \"");
+            try script.appendSlice(content);
+            try script.appendSlice("\"");
 
             const result = try std.process.Child.run(.{
-                .allocator = allocator,
-                .argv = &[_][]const u8{command},
-                .max_output_bytes = 1024 * 1024,
+                .allocator = std.heap.page_allocator,
+                .argv = &[_][]const u8{ "osascript", "-e", script.items },
             });
-
-            defer allocator.free(result.stderr);
 
             if (result.term.Exited != 0) {
                 return ClipboardError.CommandFailed;
