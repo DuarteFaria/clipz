@@ -9,7 +9,7 @@ Don't expect to be good, I'm just a girl. (not really but yeah)
 - [x] List the last 10 clipboard items
 - [x] Add to the list when something is copied
 - [x] Paste the last clipboard item
-	- [ ] Paste any clipboard item
+- [x] Paste any clipboard item
 - [x] Clear the clipboard
 
 ## Features that will never see the light
