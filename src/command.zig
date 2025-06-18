@@ -9,6 +9,7 @@ pub const Command = enum {
     clean,
     clear,
     help,
+    path,
     unknown,
 
     pub fn fromString(str: []const u8) Command {
@@ -20,6 +21,7 @@ pub const Command = enum {
         if (std.mem.eql(u8, str, "clean")) return .clean;
         if (std.mem.eql(u8, str, "clear")) return .clear;
         if (std.mem.eql(u8, str, "help")) return .help;
+        if (std.mem.eql(u8, str, "path")) return .path;
         return .unknown;
     }
 };

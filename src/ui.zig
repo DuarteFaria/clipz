@@ -19,7 +19,9 @@ pub const ClipboardUI = struct {
         std.debug.print("  stop          - Stop monitoring clipboard\n", .{});
         std.debug.print("  clean         - Clean the clipboard\n", .{});
         std.debug.print("  clear         - Clear the screen\n", .{});
+        std.debug.print("  path          - Show persistence file location\n", .{});
         std.debug.print("  exit          - Exit the program\n", .{});
+        std.debug.print("\nPersistence: Clipboard history is automatically saved to disk.\n", .{});
     }
 
     pub fn run(self: *ClipboardUI) !void {
@@ -50,6 +52,11 @@ pub const ClipboardUI = struct {
                         std.debug.print("\nCleaning clipboard...\n", .{});
                         try self.clipboard.clean();
                         printEntries(self.clipboard);
+                    },
+                    .path => {
+                        const path = self.clipboard.getPersistencePath();
+                        std.debug.print("\x1B[2J\x1B[H", .{});
+                        std.debug.print("Persistence file: {s}\n", .{path});
                     },
                     .exit => {
                         std.debug.print("Goodbye!\n", .{});

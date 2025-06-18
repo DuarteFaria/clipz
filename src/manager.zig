@@ -1,6 +1,7 @@
 const std = @import("std");
 const clipboard = @import("clipboard.zig");
 const ui = @import("ui.zig");
+const persistence = @import("persistence.zig");
 
 pub const ClipboardEntry = struct {
     content: []const u8,
@@ -26,19 +27,32 @@ pub const ClipboardManager = struct {
     last_content: ?[]const u8,
     monitor_thread: ?std.Thread = null,
     should_monitor: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    persistence: persistence.Persistence,
 
-    pub fn init(allocator: std.mem.Allocator, max_entries: usize) ClipboardManager {
-        return .{
+    pub fn init(allocator: std.mem.Allocator, max_entries: usize) !ClipboardManager {
+        const pers = try persistence.Persistence.init(allocator);
+
+        var manager = ClipboardManager{
             .entries = std.ArrayList(ClipboardEntry).init(allocator),
             .allocator = allocator,
             .max_entries = max_entries,
             .last_content = null,
+            .persistence = pers,
         };
+
+        try manager.loadFromPersistence();
+
+        return manager;
     }
 
     pub fn deinit(self: *ClipboardManager) void {
         self.stopMonitoring();
         std.time.sleep(100 * std.time.ns_per_ms);
+
+        self.saveToPersistence() catch |err| {
+            std.debug.print("Failed to save clipboard history: {}\n", .{err});
+        };
+
         for (self.entries.items) |entry| {
             entry.free(self.allocator);
         }
@@ -47,6 +61,29 @@ pub const ClipboardManager = struct {
             self.allocator.free(content);
             self.last_content = null;
         }
+    }
+
+    fn loadFromPersistence(self: *ClipboardManager) !void {
+        const loaded_entries = try self.persistence.loadEntries();
+        defer loaded_entries.deinit();
+
+        const start_index = if (loaded_entries.items.len > self.max_entries)
+            loaded_entries.items.len - self.max_entries
+        else
+            0;
+
+        for (loaded_entries.items[start_index..]) |entry| {
+            const content_copy = try self.allocator.dupe(u8, entry.content);
+            const new_entry = ClipboardEntry{
+                .content = content_copy,
+                .timestamp = entry.timestamp,
+            };
+            try self.entries.append(new_entry);
+        }
+    }
+
+    fn saveToPersistence(self: *ClipboardManager) !void {
+        try self.persistence.saveEntries(self.entries.items);
     }
 
     pub fn addEntry(self: *ClipboardManager, content: []const u8) !void {
@@ -69,6 +106,10 @@ pub const ClipboardManager = struct {
             self.allocator.free(last);
         }
         self.last_content = try self.allocator.dupe(u8, content);
+
+        self.saveToPersistence() catch |err| {
+            std.debug.print("Failed to save clipboard history: {}\n", .{err});
+        };
 
         ui.printEntries(self);
         std.debug.print("> ", .{});
@@ -127,6 +168,10 @@ pub const ClipboardManager = struct {
         }
         self.last_content = try self.allocator.dupe(u8, entry.content);
 
+        self.saveToPersistence() catch |err| {
+            std.debug.print("Failed to save clipboard history: {}\n", .{err});
+        };
+
         ui.printEntries(self);
     }
 
@@ -137,5 +182,13 @@ pub const ClipboardManager = struct {
 
         self.entries.clearRetainingCapacity();
         self.last_content = null;
+
+        self.saveToPersistence() catch |err| {
+            std.debug.print("Failed to save clipboard history: {}\n", .{err});
+        };
+    }
+
+    pub fn getPersistencePath(self: *const ClipboardManager) []const u8 {
+        return self.persistence.getFilePath();
     }
 };

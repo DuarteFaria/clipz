@@ -7,7 +7,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var clipboard_manager = manager.ClipboardManager.init(allocator, 10);
+    var clipboard_manager = try manager.ClipboardManager.init(allocator, 10);
     defer clipboard_manager.deinit();
 
     var clipboard_ui = ui.ClipboardUI.init(&clipboard_manager);
