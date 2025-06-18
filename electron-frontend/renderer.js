@@ -145,8 +145,6 @@ class ClipboardApp {
                         </div>
                         <div class="entry-meta">
                             <span class="entry-time">${timeAgo}</span>
-                            <span class="entry-type">${isCurrent ? 'current' : 'history'}</span>
-                            ${isCurrent ? '<span class="current-badge">CURRENT</span>' : ''}
                         </div>
                     </div>
                     <div class="entry-content">${this.escapeHtml(entry.content)}</div>

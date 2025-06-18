@@ -22,6 +22,14 @@ body {
   border-radius: 12px;
   margin: 8px;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+  /* Performance optimizations for smooth dragging */
+  transform: translateZ(0);
+  will-change: transform;
+  /* Enable hardware acceleration */
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  -webkit-perspective: 1000;
+  perspective: 1000;
 }
 
 /* Header Styles */
@@ -30,18 +38,22 @@ body {
   border-bottom: 1px solid #e9ecef;
   padding: 16px 24px;
   border-radius: 12px 12px 0 0;
+  -webkit-app-region: drag;
+  will-change: transform;
 }
 
 .header-content {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  -webkit-app-region: inherit;
 }
 
 .header-left {
   display: flex;
   align-items: center;
   gap: 16px;
+  -webkit-app-region: inherit;
 }
 
 .app-title {
@@ -49,6 +61,9 @@ body {
   font-weight: 600;
   color: #2d3748;
   margin: 0;
+  -webkit-app-region: inherit;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .entry-count {
@@ -57,12 +72,17 @@ body {
   background: #edf2f7;
   padding: 4px 12px;
   border-radius: 16px;
+  -webkit-app-region: inherit;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .header-right {
   display: flex;
   align-items: center;
   gap: 12px;
+  /* Disable dragging for interactive elements */
+  -webkit-app-region: no-drag;
 }
 
 /* Button Styles */
@@ -77,6 +97,7 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+  -webkit-app-region: no-drag;
 }
 
 .btn:hover {
@@ -105,6 +126,7 @@ body {
   color: #4a5568;
   font-size: 16px;
   font-weight: bold;
+  -webkit-app-region: no-drag;
 }
 
 .zoom-controls {
@@ -114,6 +136,7 @@ body {
   background: #f7fafc;
   padding: 4px;
   border-radius: 20px;
+  -webkit-app-region: no-drag;
 }
 
 .zoom-level {
@@ -121,6 +144,8 @@ body {
   color: #718096;
   min-width: 36px;
   text-align: center;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* Search Section */
@@ -128,12 +153,16 @@ body {
   padding: 16px 24px;
   background: #fff;
   border-bottom: 1px solid #e9ecef;
+  /* Ensure search area is not draggable */
+  -webkit-app-region: no-drag;
 }
 
 .search-container {
   position: relative;
   display: flex;
   align-items: center;
+  /* Ensure search container is not draggable */
+  -webkit-app-region: no-drag;
 }
 
 .search-icon {
@@ -141,6 +170,9 @@ body {
   left: 12px;
   color: #718096;
   pointer-events: none;
+  /* Prevent text selection */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .search-input {
@@ -151,6 +183,8 @@ body {
   font-size: 14px;
   transition: all 0.2s ease;
   background: #f7fafc;
+  /* Ensure input is not draggable */
+  -webkit-app-region: no-drag;
 }
 
 .search-input:focus {
@@ -174,6 +208,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  /* Ensure clear button is not draggable */
+  -webkit-app-region: no-drag;
 }
 
 .search-clear:hover {
@@ -594,16 +630,7 @@ body.hotkey-active .app {
   font-weight: 500;
 }
 
-.current-badge {
-  background: rgba(255, 255, 255, 0.2);
-  color: white;
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 10px;
-  font-weight: 700;
-  margin-left: 8px;
-  letter-spacing: 0.5px;
-}
+
 
 .clipboard-entry.history-entry {
   background: #f8f9fa;
@@ -617,4 +644,28 @@ body.hotkey-active .app {
 .clipboard-entry.history-entry .entry-type {
   background: #e2e8f0;
   color: #64748b;
+}
+
+/* Drag Indicator */
+.drag-indicator {
+  color: #cbd5e0;
+  font-size: 12px;
+  font-weight: bold;
+  letter-spacing: -1px;
+  margin-left: 8px;
+  opacity: 0.6;
+  transition: opacity 0.2s ease;
+  cursor: move;
+  /* Make sure it's draggable */
+  -webkit-app-region: inherit;
+  user-select: none;
+  -webkit-user-select: none;
+  /* Visual feedback */
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.drag-indicator:hover {
+  opacity: 1;
+  background: rgba(203, 213, 224, 0.3);
 }

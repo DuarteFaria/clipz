@@ -17,11 +17,19 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, 'preload.js')
+      preload: path.join(__dirname, 'preload.js'),
+      // Enable hardware acceleration for better performance
+      webSecurity: true,
+      enableRemoteModule: false
     },
     titleBarStyle: 'hiddenInset', // macOS style
     backgroundColor: '#f8f8f8',
-    show: false // Don't show until ready
+    show: false, // Don't show until ready
+    // Enable frame optimization for dragging
+    frame: process.platform === 'darwin' ? true : false,
+    // Additional performance optimizations
+    useContentSize: true,
+    enableLargerThanScreen: false
   });
 
   mainWindow.loadFile('index.html');
