@@ -24,6 +24,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // Add SDL2 dependencies to library as well
+    lib.linkSystemLibrary("SDL2");
+    lib.linkSystemLibrary("SDL2_ttf");
+    lib.linkLibC();
+    lib.addIncludePath(.{ .cwd_relative = "/opt/homebrew/include" });
+    lib.addIncludePath(.{ .cwd_relative = "/opt/homebrew/include/SDL2" });
+
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
     // running `zig build`).
@@ -36,9 +43,18 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // This declares intent for the executable to be installed into the
-    // standard location when the user invokes the "install" step (the default
-    // step when running `zig build`).
+    // Link system SDL2 libraries (requires SDL2 to be installed via brew)
+    exe.linkSystemLibrary("SDL2");
+    exe.linkSystemLibrary("SDL2_ttf");
+    exe.linkLibC();
+
+    // Add SDL2 include paths using cwd_relative for absolute paths
+    exe.addIncludePath(.{ .cwd_relative = "/opt/homebrew/include" });
+    exe.addIncludePath(.{ .cwd_relative = "/opt/homebrew/include/SDL2" });
+
+    // This declares intent for the executable to be installed into the standard
+    // location when the user invokes the "install" step (the default step when
+    // running `zig build`).
     b.installArtifact(exe);
 
     // This *creates* a Run step in the build graph, to be executed when another

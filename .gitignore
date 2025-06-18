@@ -1,0 +1,23 @@
+# Zig cache directory
+.zig-cache/
+
+# Build output
+zig-out/
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Node modules (for electron-frontend)
+electron-frontend/node_modules/
+
+# Other common ignores
+*.log
+*.tmp 

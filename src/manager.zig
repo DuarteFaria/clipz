@@ -87,9 +87,10 @@ pub const ClipboardManager = struct {
     }
 
     pub fn addEntry(self: *ClipboardManager, content: []const u8) !void {
-        if (self.last_content) |last| {
-            if (std.mem.eql(u8, last, content)) {
-                return;
+        // Check if content already exists in any entry
+        for (self.entries.items) |existing_entry| {
+            if (std.mem.eql(u8, existing_entry.content, content)) {
+                return; // Don't add duplicate content
             }
         }
 
@@ -122,14 +123,27 @@ pub const ClipboardManager = struct {
     fn monitorThread(self: *ClipboardManager) !void {
         while (self.should_monitor.load(.acquire)) {
             const content = clipboard.getContent(self.allocator) catch |err| switch (err) {
-                clipboard.ClipboardError.NoClipboardContent => continue,
-                clipboard.ClipboardError.CommandFailed => continue,
+                clipboard.ClipboardError.NoClipboardContent => {
+                    // Check should_monitor more frequently when there's no content
+                    std.time.sleep(100 * std.time.ns_per_ms);
+                    continue;
+                },
+                clipboard.ClipboardError.CommandFailed => {
+                    std.time.sleep(100 * std.time.ns_per_ms);
+                    continue;
+                },
                 else => return err,
             };
             defer self.allocator.free(content);
 
             try self.addEntry(content);
-            std.time.sleep(1000 * std.time.ns_per_ms);
+
+            // Check should_monitor more frequently for better responsiveness
+            var sleep_count: u32 = 0;
+            while (sleep_count < 10 and self.should_monitor.load(.acquire)) {
+                std.time.sleep(100 * std.time.ns_per_ms);
+                sleep_count += 1;
+            }
         }
     }
 
@@ -144,11 +158,16 @@ pub const ClipboardManager = struct {
 
     pub fn stopMonitoring(self: *ClipboardManager) void {
         if (self.monitor_thread) |thread| {
+            std.debug.print("Signaling monitor thread to stop...\n", .{});
             self.should_monitor.store(false, .release);
+
+            // Give the thread a moment to notice the signal
+            std.time.sleep(100 * std.time.ns_per_ms);
+
+            std.debug.print("Waiting for monitor thread to join...\n", .{});
             thread.join();
             self.monitor_thread = null;
-            std.debug.print("> ", .{});
-            std.debug.print("\nStopped monitoring clipboard.\n", .{});
+            std.debug.print("Monitor thread stopped successfully.\n", .{});
         }
     }
 
@@ -180,11 +199,17 @@ pub const ClipboardManager = struct {
             self.allocator.free(last);
         }
 
+        // Free memory for all entries
+        for (self.entries.items) |entry| {
+            entry.free(self.allocator);
+        }
+
         self.entries.clearRetainingCapacity();
         self.last_content = null;
 
-        self.saveToPersistence() catch |err| {
-            std.debug.print("Failed to save clipboard history: {}\n", .{err});
+        // Clear the persistence file completely
+        self.persistence.clearPersistence() catch |err| {
+            std.debug.print("Failed to clear persistence file: {}\n", .{err});
         };
     }
 

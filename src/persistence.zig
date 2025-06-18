@@ -94,6 +94,14 @@ pub const Persistence = struct {
         return entries;
     }
 
+    pub fn clearPersistence(self: *Persistence) !void {
+        // Delete the persistence file completely
+        std.fs.cwd().deleteFile(self.getFilePath()) catch |err| switch (err) {
+            error.FileNotFound => {}, // File doesn't exist, that's fine
+            else => return err,
+        };
+    }
+
     pub fn getFilePath(self: *const Persistence) []const u8 {
         return self.file_path[0..self.file_path_len];
     }
