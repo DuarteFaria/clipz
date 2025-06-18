@@ -1,6 +1,7 @@
 const std = @import("std");
 const manager = @import("manager.zig");
 const ui = @import("ui.zig");
+const config = @import("config.zig");
 
 const c = @cImport({
     @cInclude("signal.h");
@@ -14,16 +15,16 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    var clipboard_manager = try manager.ClipboardManager.init(allocator, 10);
-    defer clipboard_manager.deinit();
-
-    // Parse command line arguments
-    const mode = parseArguments(args) catch |err| {
+    // Parse command line arguments and determine config
+    const parse_result = parseArguments(args) catch |err| {
         printUsage();
         return err;
     };
 
-    switch (mode) {
+    var clipboard_manager = try manager.ClipboardManager.initWithConfig(allocator, parse_result.config);
+    defer clipboard_manager.deinit();
+
+    switch (parse_result.mode) {
         .cli => {
             var clipboard_ui = ui.ClipboardUI.init(&clipboard_manager);
             try clipboard_ui.run();
@@ -40,35 +41,61 @@ const RunMode = enum {
     json_api,
 };
 
-fn parseArguments(args: []const []const u8) !RunMode {
+const ParseResult = struct {
+    mode: RunMode,
+    config: config.Config,
+};
+
+fn parseArguments(args: []const []const u8) !ParseResult {
+    var mode: RunMode = .cli; // Default to CLI mode
+    var cfg = config.Config.default();
+
     if (args.len == 1) {
-        return .cli; // Default to CLI mode
+        return ParseResult{ .mode = mode, .config = cfg };
     }
 
-    const flag = args[1];
-    if (std.mem.eql(u8, flag, "--json-api") or std.mem.eql(u8, flag, "-j")) {
-        return .json_api;
-    } else if (std.mem.eql(u8, flag, "--cli") or std.mem.eql(u8, flag, "-c")) {
-        return .cli;
-    } else if (std.mem.eql(u8, flag, "--help") or std.mem.eql(u8, flag, "-h")) {
-        printUsage();
-        return error.HelpRequested;
-    } else {
-        std.debug.print("Unknown option: {s}\n", .{flag});
-        printUsage();
-        return error.InvalidArgument;
+    var i: usize = 1;
+    while (i < args.len) {
+        const flag = args[i];
+
+        if (std.mem.eql(u8, flag, "--json-api") or std.mem.eql(u8, flag, "-j")) {
+            mode = .json_api;
+        } else if (std.mem.eql(u8, flag, "--cli") or std.mem.eql(u8, flag, "-c")) {
+            mode = .cli;
+        } else if (std.mem.eql(u8, flag, "--low-power") or std.mem.eql(u8, flag, "-l")) {
+            cfg = config.Config.lowPower();
+        } else if (std.mem.eql(u8, flag, "--responsive") or std.mem.eql(u8, flag, "-r")) {
+            cfg = config.Config.responsive();
+        } else if (std.mem.eql(u8, flag, "--help") or std.mem.eql(u8, flag, "-h")) {
+            printUsage();
+            return error.HelpRequested;
+        } else {
+            std.debug.print("Unknown option: {s}\n", .{flag});
+            printUsage();
+            return error.InvalidArgument;
+        }
+        i += 1;
     }
+
+    return ParseResult{ .mode = mode, .config = cfg };
 }
 
 fn printUsage() void {
     std.debug.print(
         \\Clipz - Clipboard Manager
         \\
-        \\Usage: clipz [OPTION]
+        \\Usage: clipz [OPTIONS]
         \\
-        \\Options:
+        \\Mode Options:
         \\  -c, --cli       Run in CLI mode (default)
         \\  -j, --json-api  Run in JSON API mode for Electron integration
+        \\
+        \\Performance Options:
+        \\  -l, --low-power     Low power mode (slower polling, longer saves)
+        \\  -r, --responsive    Responsive mode (faster polling, frequent saves)
+        \\  (default)           Balanced mode
+        \\
+        \\Other Options:
         \\  -h, --help      Show this help message
         \\
         \\CLI Controls:
@@ -76,6 +103,11 @@ fn printUsage() void {
         \\  get <n>       Copy entry n to clipboard
         \\  clean         Clear all entries
         \\  exit          Quit application
+        \\
+        \\Performance Modes:
+        \\  - Low Power: 250ms-1s polling, 30s saves (great for battery life)
+        \\  - Balanced:  100ms-250ms polling, 5s saves (default)
+        \\  - Responsive: 50ms-150ms polling, 2s saves (fastest response)
         \\
         \\Note: For global hotkeys, use the Electron frontend with 'npm start'
         \\

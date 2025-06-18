@@ -78,7 +78,8 @@ function createWindow() {
 function startZigBackend() {
   const zigPath = path.join(__dirname, '..', 'zig-out', 'bin', 'clipz');
 
-  zigBackend = spawn(zigPath, ['--json-api'], {
+  // Use low-power mode for better battery life
+  zigBackend = spawn(zigPath, ['--json-api', '--low-power'], {
     stdio: ['pipe', 'pipe', 'pipe']
   });
 

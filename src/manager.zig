@@ -2,6 +2,7 @@ const std = @import("std");
 const clipboard = @import("clipboard.zig");
 const ui = @import("ui.zig");
 const persistence = @import("persistence.zig");
+const config = @import("config.zig");
 
 pub const ClipboardEntry = struct {
     content: []const u8,
@@ -28,16 +29,26 @@ pub const ClipboardManager = struct {
     monitor_thread: ?std.Thread = null,
     should_monitor: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     persistence: persistence.Persistence,
+    // Batched persistence fields
+    dirty_flag: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    last_save_time: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
+    // Configuration
+    config: config.Config,
 
     pub fn init(allocator: std.mem.Allocator, max_entries: usize) !ClipboardManager {
+        return initWithConfig(allocator, max_entries, config.Config.default());
+    }
+
+    pub fn initWithConfig(allocator: std.mem.Allocator, cfg: config.Config) !ClipboardManager {
         const pers = try persistence.Persistence.init(allocator);
 
         var manager = ClipboardManager{
             .entries = std.ArrayList(ClipboardEntry).init(allocator),
             .allocator = allocator,
-            .max_entries = max_entries,
+            .max_entries = cfg.max_entries,
             .last_content = null,
             .persistence = pers,
+            .config = cfg,
         };
 
         try manager.loadFromPersistence();
@@ -49,9 +60,8 @@ pub const ClipboardManager = struct {
         self.stopMonitoring();
         std.time.sleep(100 * std.time.ns_per_ms);
 
-        self.saveToPersistence() catch |err| {
-            std.debug.print("Failed to save clipboard history: {}\n", .{err});
-        };
+        // Force save any pending changes
+        self.forceSavePersistence();
 
         for (self.entries.items) |entry| {
             entry.free(self.allocator);
@@ -108,12 +118,39 @@ pub const ClipboardManager = struct {
         }
         self.last_content = try self.allocator.dupe(u8, content);
 
-        self.saveToPersistence() catch |err| {
-            std.debug.print("Failed to save clipboard history: {}\n", .{err});
-        };
+        // Mark as dirty for batched persistence
+        self.dirty_flag.store(true, .release);
+        self.trySavePersistence();
 
         ui.printEntries(self);
         std.debug.print("> ", .{});
+    }
+
+    // Batched persistence - only save if dirty and enough time has passed
+    fn trySavePersistence(self: *ClipboardManager) void {
+        const now = std.time.timestamp();
+        const last_save = self.last_save_time.load(.acquire);
+
+        // Save if dirty and enough time has passed (configurable interval)
+        if (self.dirty_flag.load(.acquire) and (now - last_save >= self.config.batch_save_interval)) {
+            self.saveToPersistence() catch |err| {
+                std.debug.print("Failed to save clipboard history: {}\n", .{err});
+                return;
+            };
+            self.dirty_flag.store(false, .release);
+            self.last_save_time.store(now, .release);
+        }
+    }
+
+    // Force save (for shutdown)
+    fn forceSavePersistence(self: *ClipboardManager) void {
+        if (self.dirty_flag.load(.acquire)) {
+            self.saveToPersistence() catch |err| {
+                std.debug.print("Failed to save clipboard history: {}\n", .{err});
+            };
+            self.dirty_flag.store(false, .release);
+            self.last_save_time.store(std.time.timestamp(), .release);
+        }
     }
 
     pub fn getEntries(self: *const ClipboardManager) []const ClipboardEntry {
@@ -121,15 +158,23 @@ pub const ClipboardManager = struct {
     }
 
     fn monitorThread(self: *ClipboardManager) !void {
+        var consecutive_failures: u32 = 0;
+        var last_change_time: i64 = std.time.timestamp();
+        var save_counter: u32 = 0;
+
         while (self.should_monitor.load(.acquire)) {
             const content = clipboard.getContent(self.allocator) catch |err| switch (err) {
                 clipboard.ClipboardError.NoClipboardContent => {
-                    // Check should_monitor more frequently when there's no content
-                    std.time.sleep(100 * std.time.ns_per_ms);
+                    consecutive_failures += 1;
+                    // Adaptive backoff: increase delay for consecutive failures
+                    const delay_ms: u64 = @min(self.config.max_poll_interval, self.config.min_poll_interval + (consecutive_failures * 50));
+                    std.time.sleep(delay_ms * std.time.ns_per_ms);
                     continue;
                 },
                 clipboard.ClipboardError.CommandFailed => {
-                    std.time.sleep(100 * std.time.ns_per_ms);
+                    consecutive_failures += 1;
+                    const delay_ms: u64 = @min(self.config.max_poll_interval, self.config.min_poll_interval + (consecutive_failures * 50));
+                    std.time.sleep(delay_ms * std.time.ns_per_ms);
                     continue;
                 },
                 else => return err,
@@ -137,12 +182,29 @@ pub const ClipboardManager = struct {
             defer self.allocator.free(content);
 
             try self.addEntry(content);
+            consecutive_failures = 0; // Reset on success
+            last_change_time = std.time.timestamp();
 
-            // Check should_monitor more frequently for better responsiveness
+            // Adaptive sleep: longer delays when inactive (configurable)
+            const time_since_change = std.time.timestamp() - last_change_time;
+            const base_delay: u64 = if (time_since_change > self.config.inactive_threshold)
+                self.config.max_poll_interval
+            else
+                self.config.min_poll_interval;
+
+            // Split sleep for responsiveness and periodic saves
             var sleep_count: u32 = 0;
-            while (sleep_count < 10 and self.should_monitor.load(.acquire)) {
-                std.time.sleep(100 * std.time.ns_per_ms);
+            const chunks = base_delay / 50;
+            while (sleep_count < chunks and self.should_monitor.load(.acquire)) {
+                std.time.sleep(50 * std.time.ns_per_ms);
                 sleep_count += 1;
+                save_counter += 1;
+
+                // Attempt periodic save (configurable frequency)
+                if (save_counter >= self.config.force_save_cycles) {
+                    self.trySavePersistence();
+                    save_counter = 0;
+                }
             }
         }
     }
@@ -187,9 +249,9 @@ pub const ClipboardManager = struct {
         }
         self.last_content = try self.allocator.dupe(u8, entry.content);
 
-        self.saveToPersistence() catch |err| {
-            std.debug.print("Failed to save clipboard history: {}\n", .{err});
-        };
+        // Mark as dirty for batched persistence
+        self.dirty_flag.store(true, .release);
+        self.trySavePersistence();
 
         ui.printEntries(self);
     }
