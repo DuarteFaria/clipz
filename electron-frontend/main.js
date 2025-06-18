@@ -76,7 +76,16 @@ function createWindow() {
 
 // Start the Zig backend process in JSON API mode
 function startZigBackend() {
-  const zigPath = path.join(__dirname, '..', 'zig-out', 'bin', 'clipz');
+  // In development, use the built binary from zig-out
+  // In production (packaged), use the binary from Resources
+  let zigPath;
+  if (app.isPackaged) {
+    // In packaged app, binary is in Resources/bin/
+    zigPath = path.join(process.resourcesPath, 'bin', 'clipz');
+  } else {
+    // In development, use the zig-out binary
+    zigPath = path.join(__dirname, '..', 'zig-out', 'bin', 'clipz');
+  }
 
   // Use low-power mode for better battery life
   zigBackend = spawn(zigPath, ['--json-api', '--low-power'], {
