@@ -28,6 +28,13 @@ class ClipboardApp {
     this.zoomOutBtnEl = document.getElementById('zoomOutBtn');
     this.statusEl = document.getElementById('status');
     this.loadingOverlayEl = document.getElementById('loadingOverlay');
+    this.themeSwitcherEl = document.getElementById('themeSwitcher');
+
+    // Create theme dropdown dynamically
+    this.createThemeDropdown();
+
+    // Load saved theme
+    this.loadTheme();
   }
 
   attachEventListeners() {
@@ -59,6 +66,19 @@ class ClipboardApp {
     this.zoomOutBtnEl.addEventListener('click', () => {
       this.adjustZoom(-10);
     });
+
+    // Theme switcher
+    this.themeSwitcherEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.toggleThemeDropdown();
+    });
+
+    // Close theme dropdown when clicking outside
+    document.addEventListener('click', () => {
+      this.hideThemeDropdown();
+    });
+
+    // Theme selection will be handled in createThemeDropdown
 
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
@@ -430,6 +450,114 @@ class ClipboardApp {
     } catch (error) {
       console.error('Failed to select entry:', error);
       this.updateStatus('Failed to select entry', 'error');
+    }
+  }
+
+  // Theme Management
+  createThemeDropdown() {
+    // Create dropdown element
+    this.themeDropdownEl = document.createElement('div');
+    this.themeDropdownEl.className = 'theme-dropdown';
+
+    // Create theme options
+    const themes = [
+      { id: '', name: '🌅 Summer' },
+      { id: 'theme-ocean', name: '🌊 Ocean' },
+      { id: 'theme-forest', name: '🌲 Forest' },
+      { id: 'theme-dark', name: '🌙 Dark' }
+    ];
+
+    themes.forEach(theme => {
+      const option = document.createElement('div');
+      option.className = 'theme-option';
+      option.dataset.theme = theme.id;
+      option.textContent = theme.name;
+      option.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.setTheme(theme.id);
+        this.hideThemeDropdown();
+      });
+      this.themeDropdownEl.appendChild(option);
+    });
+
+    // Append to body
+    document.body.appendChild(this.themeDropdownEl);
+  }
+
+  loadTheme() {
+    const savedTheme = localStorage.getItem('clipz-theme') || '';
+    this.setTheme(savedTheme);
+  }
+
+  setTheme(theme) {
+    // Remove any existing theme classes
+    document.body.className = document.body.className
+      .split(' ')
+      .filter(className => !className.startsWith('theme-'))
+      .join(' ');
+
+    // Add new theme class if provided
+    if (theme) {
+      document.body.classList.add(theme);
+    }
+
+    // Save theme preference
+    localStorage.setItem('clipz-theme', theme);
+
+    // Update active state in dropdown
+    this.updateActiveTheme(theme);
+
+    // Show feedback
+    const themeNames = {
+      '': 'Summer',
+      'theme-ocean': 'Ocean',
+      'theme-forest': 'Forest',
+      'theme-dark': 'Dark'
+    };
+    this.updateStatus(`Theme changed to ${themeNames[theme]}`, 'success');
+  }
+
+  updateActiveTheme(activeTheme) {
+    document.querySelectorAll('.theme-option').forEach(option => {
+      option.classList.toggle('active', option.dataset.theme === activeTheme);
+    });
+  }
+
+  toggleThemeDropdown() {
+    const isVisible = this.themeDropdownEl.style.display !== 'none';
+    if (isVisible) {
+      this.hideThemeDropdown();
+    } else {
+      this.showThemeDropdown();
+    }
+  }
+
+  showThemeDropdown() {
+    // Create backdrop
+    if (!this.themeBackdrop) {
+      this.themeBackdrop = document.createElement('div');
+      this.themeBackdrop.className = 'theme-backdrop';
+      this.themeBackdrop.addEventListener('click', () => this.hideThemeDropdown());
+      document.body.appendChild(this.themeBackdrop);
+    }
+
+    // Position dropdown relative to theme button
+    const buttonRect = this.themeSwitcherEl.getBoundingClientRect();
+    this.themeDropdownEl.style.top = `${buttonRect.bottom + 8}px`;
+    this.themeDropdownEl.style.right = `${window.innerWidth - buttonRect.right}px`;
+
+    this.themeBackdrop.style.display = 'block';
+    this.themeDropdownEl.style.display = 'block';
+
+    // Update active theme in case it changed
+    const currentTheme = localStorage.getItem('clipz-theme') || '';
+    this.updateActiveTheme(currentTheme);
+  }
+
+  hideThemeDropdown() {
+    this.themeDropdownEl.style.display = 'none';
+    if (this.themeBackdrop) {
+      this.themeBackdrop.style.display = 'none';
     }
   }
 }
