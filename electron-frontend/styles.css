@@ -653,12 +653,15 @@ body {
 
 .entry-header {
   display: flex;
-  justify-content: space-between;
+  justify-content: center;
   align-items: center;
   margin-bottom: 8px;
+  position: relative;
 }
 
 .entry-index {
+  position: absolute;
+  left: 0;
   background: var(--entry-index-bg);
   color: var(--text-on-primary);
   width: 24px;
@@ -1064,4 +1067,111 @@ body.hotkey-active .app {
 .drag-indicator:hover {
   opacity: 1;
   background: var(--drag-indicator-hover);
+}
+
+/* Image Preview Styles */
+.image-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.image-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--border-secondary);
+  border-radius: 8px;
+  min-height: 80px;
+  background: var(--surface-secondary);
+  position: relative;
+  overflow: hidden;
+}
+
+.preview-image {
+  max-width: 100%;
+  max-height: 80px;
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+.image-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+}
+
+.image-icon {
+  font-size: 24px;
+  opacity: 0.7;
+}
+
+.image-filename {
+  font-size: 12px;
+  font-weight: 500;
+  text-align: center;
+  word-break: break-all;
+}
+
+.image-path {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: Monaco, 'Courier New', monospace;
+  word-break: break-all;
+  background: var(--surface-tertiary);
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.clipboard-entry.selected .image-path {
+  background: var(--entry-type-selected-bg);
+  color: var(--text-on-primary-muted);
+}
+
+/* Update entry-type spacing */
+.entry-meta .entry-type {
+  margin-left: 8px;
+}
+
+/* Remove Entry Button */
+.remove-entry-btn {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.1);
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: bold;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  opacity: 0;
+  z-index: 10;
+}
+
+.clipboard-entry:hover .remove-entry-btn {
+  opacity: 1;
+}
+
+.remove-entry-btn:hover {
+  background: #ff4757;
+  color: white;
+  transform: scale(1.1);
+}
+
+.remove-entry-btn:active {
+  transform: scale(0.95);
+}
+
+/* Make entry-header relative for positioning */
+.entry-header {
+  position: relative;
 }

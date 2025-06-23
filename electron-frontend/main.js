@@ -321,6 +321,11 @@ ipcMain.handle('clear-clipboard', async () => {
   return { success: true };
 });
 
+ipcMain.handle('remove-entry', async (event, index) => {
+  sendZigCommand(`remove-entry:${index}`);
+  return { success: true };
+});
+
 // Update handler for Zig messages
 function handleZigMessage(message) {
   if (message.type === 'entries') {

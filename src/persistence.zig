@@ -1,5 +1,6 @@
 const std = @import("std");
 const manager = @import("manager.zig");
+const clipboard = @import("clipboard.zig");
 
 pub const Persistence = struct {
     file_path: [256]u8,
@@ -27,7 +28,7 @@ pub const Persistence = struct {
         var writer = json.writer();
 
         try writer.writeAll("{\n");
-        try writer.print("  \"version\": 1,\n", .{});
+        try writer.print("  \"version\": 2,\n", .{});
         try writer.print("  \"entries\": [\n", .{});
 
         for (entries, 0..) |entry, i| {
@@ -35,7 +36,8 @@ pub const Persistence = struct {
             try writer.writeAll("      \"content\": ");
             try std.json.encodeJsonString(entry.content, .{}, writer);
             try writer.writeAll(",\n");
-            try writer.print("      \"timestamp\": {d}\n", .{entry.timestamp});
+            try writer.print("      \"timestamp\": {d},\n", .{entry.timestamp});
+            try writer.print("      \"type\": \"{s}\"\n", .{@tagName(entry.entry_type)});
 
             if (i < entries.len - 1) {
                 try writer.writeAll("    },\n");
@@ -73,6 +75,7 @@ pub const Persistence = struct {
         defer parsed.deinit();
         const root = parsed.value;
 
+        const version = if (root.object.get("version")) |v| if (v == .integer) v.integer else 1 else 1;
         const entries_array = root.object.get("entries") orelse return entries;
         if (entries_array != .array) return error.InvalidFormat;
 
@@ -81,12 +84,30 @@ pub const Persistence = struct {
             const content_field = item.object.get("content") orelse continue;
             const timestamp_field = item.object.get("timestamp") orelse continue;
             if (content_field != .string or timestamp_field != .integer) continue;
+
             const content_str = content_field.string;
             const timestamp = timestamp_field.integer;
+
+            // Handle entry type - default to text for backward compatibility
+            var entry_type: clipboard.ClipboardType = .text;
+            if (version >= 2) {
+                if (item.object.get("type")) |type_field| {
+                    if (type_field == .string) {
+                        const type_str = type_field.string;
+                        if (std.mem.eql(u8, type_str, "image")) {
+                            entry_type = .image;
+                        } else {
+                            entry_type = .text;
+                        }
+                    }
+                }
+            }
+
             const content_copy = try std.heap.page_allocator.dupe(u8, content_str);
             const entry = manager.ClipboardEntry{
                 .content = content_copy,
                 .timestamp = timestamp,
+                .entry_type = entry_type,
             };
             try entries.append(entry);
         }

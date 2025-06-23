@@ -2,6 +2,67 @@
 
 This guide explains how to integrate Clipz with various workflows and applications. Clipz provides multiple interfaces to fit different use cases.
 
+## Overview
+
+Clipz is a powerful clipboard manager that can be integrated with other applications through its JSON API mode. This document describes the integration interface and new features.
+
+## New Features (Image Support)
+
+### 🖼️ Image Detection and Management
+
+Clipz now automatically detects and manages both text and image clipboard content:
+
+- **Automatic Type Detection**: Uses native macOS `osascript` to detect clipboard content type
+- **Image Path Storage**: Stores file paths for images instead of copying files
+- **Smart Fallback**: Handles images without file paths (screenshots, web images, etc.)
+- **Duplicate Prevention**: Prevents duplicates based on both content and type
+
+### 📡 API Changes
+
+The JSON API has been enhanced to support image entries:
+
+#### Entry Format
+```json
+{
+  "id": 1,
+  "content": "/path/to/image.png", // or "[Image Data - No File Path]"
+  "timestamp": 1640995200000,
+  "type": "image", // or "text"
+  "isCurrent": true
+}
+```
+
+#### Supported Types
+- `"text"` - Text clipboard content
+- `"image"` - Image clipboard content (with file path or data indicator)
+
+### 🔧 Technical Implementation
+
+#### Clipboard Detection
+```applescript
+-- Type detection
+set theClipboard to the clipboard
+try
+    set imgData to the clipboard as picture
+    return "image"
+on error
+    return "text"
+end try
+
+-- Path retrieval for images
+try
+    set imgPath to the clipboard as alias
+    return POSIX path of imgPath
+on error
+    return "[Image Data - No File Path]"
+end try
+```
+
+#### Data Storage
+- **Version 2 Format**: Persistence files now include a `type` field
+- **Backward Compatibility**: Existing entries are automatically upgraded
+- **Efficient Storage**: Images store paths only, not file data
+
 ## Integration Modes
 
 ### 1. CLI Integration
@@ -152,66 +213,3 @@ Options:
 
 Note: For global hotkeys, use the Electron frontend with 'npm start'
 ```
-
-## Example Integrations
-
-### Alfred Workflow (macOS)
-
-Create an Alfred script filter that queries Clipz:
-
-```bash
-#!/bin/bash
-echo "get-entries" | /path/to/clipz --json-api | jq '.data[] | {title: .content, arg: .id}'
-```
-
-### Raycast Extension
-
-Use the JSON API to build a Raycast extension for clipboard management.
-
-### tmux Integration
-
-Add to `.tmux.conf`:
-
-```bash
-bind-key p run-shell "echo 'get 1' | /path/to/clipz --cli | tmux load-buffer -"
-```
-
-## Best Practices
-
-1. **Use Electron frontend** for daily use with global hotkeys
-2. **Use JSON API** for building custom interfaces  
-3. **Use CLI mode** for one-off operations and scripts
-4. **Monitor memory usage** with large clipboard histories
-5. **Set appropriate max entries** for your use case
-
-## Troubleshooting
-
-### Common Issues
-
-**Global hotkeys not working:**
-- Use the Electron frontend instead of trying to set up manual hotkeys
-- Ensure the Electron app has necessary permissions
-
-**JSON API not responding:**
-- Check that process is running in JSON API mode
-- Verify stdin/stdout are properly connected
-- Test with simple commands first
-
-### Debug Mode
-
-Enable debug output:
-
-```bash
-CLIPZ_DEBUG=1 ./zig-out/bin/clipz --cli
-```
-
-## Contributing
-
-Want to add new integrations? Please:
-
-1. Test with existing JSON API first
-2. Document the integration approach
-3. Provide example configurations
-4. Submit pull requests with clear descriptions
-
-For questions or support, please open an issue in the repository. 

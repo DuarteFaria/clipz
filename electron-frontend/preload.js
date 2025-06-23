@@ -12,6 +12,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Clear clipboard
   clearClipboard: () => ipcRenderer.invoke('clear-clipboard'),
 
+  // Remove a specific entry
+  removeEntry: (index) => ipcRenderer.invoke('remove-entry', index),
+
   // Listen for events from main process
   onSelectEntry: (callback) => {
     ipcRenderer.on('select-entry', callback);

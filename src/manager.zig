@@ -7,12 +7,14 @@ const config = @import("config.zig");
 pub const ClipboardEntry = struct {
     content: []const u8,
     timestamp: i64,
+    entry_type: clipboard.ClipboardType,
 
-    pub fn create(allocator: std.mem.Allocator, content: []const u8) !ClipboardEntry {
+    pub fn create(allocator: std.mem.Allocator, content: []const u8, entry_type: clipboard.ClipboardType) !ClipboardEntry {
         const content_copy = try allocator.dupe(u8, content);
         return ClipboardEntry{
             .content = content_copy,
             .timestamp = std.time.timestamp(),
+            .entry_type = entry_type,
         };
     }
 
@@ -87,6 +89,7 @@ pub const ClipboardManager = struct {
             const new_entry = ClipboardEntry{
                 .content = content_copy,
                 .timestamp = entry.timestamp,
+                .entry_type = entry.entry_type,
             };
             try self.entries.append(new_entry);
         }
@@ -96,15 +99,21 @@ pub const ClipboardManager = struct {
         try self.persistence.saveEntries(self.entries.items);
     }
 
-    pub fn addEntry(self: *ClipboardManager, content: []const u8) !void {
+    pub fn addEntry(self: *ClipboardManager, clipboard_content: clipboard.ClipboardContent) !void {
         // Check if content already exists in any entry
         for (self.entries.items) |existing_entry| {
-            if (std.mem.eql(u8, existing_entry.content, content)) {
+            if (std.mem.eql(u8, existing_entry.content, clipboard_content.content) and
+                existing_entry.entry_type == clipboard_content.type)
+            {
+                // Free the clipboard content since we're not using it
+                self.allocator.free(clipboard_content.content);
                 return; // Don't add duplicate content
             }
         }
 
-        const entry = try ClipboardEntry.create(self.allocator, content);
+        const entry = try ClipboardEntry.create(self.allocator, clipboard_content.content, clipboard_content.type);
+        // Free the original clipboard content since we made a copy
+        self.allocator.free(clipboard_content.content);
 
         if (self.entries.items.len >= self.max_entries) {
             const oldest = self.entries.orderedRemove(0);
@@ -116,7 +125,7 @@ pub const ClipboardManager = struct {
         if (self.last_content) |last| {
             self.allocator.free(last);
         }
-        self.last_content = try self.allocator.dupe(u8, content);
+        self.last_content = try self.allocator.dupe(u8, entry.content);
 
         // Mark as dirty for batched persistence
         self.dirty_flag.store(true, .release);
@@ -163,7 +172,7 @@ pub const ClipboardManager = struct {
         var save_counter: u32 = 0;
 
         while (self.should_monitor.load(.acquire)) {
-            const content = clipboard.getContent(self.allocator) catch |err| switch (err) {
+            const clipboard_content = clipboard.getContent(self.allocator) catch |err| switch (err) {
                 clipboard.ClipboardError.NoClipboardContent => {
                     consecutive_failures += 1;
                     // Adaptive backoff: increase delay for consecutive failures
@@ -179,9 +188,8 @@ pub const ClipboardManager = struct {
                 },
                 else => return err,
             };
-            defer self.allocator.free(content);
 
-            try self.addEntry(content);
+            try self.addEntry(clipboard_content);
             consecutive_failures = 0; // Reset on success
             last_change_time = std.time.timestamp();
 
@@ -248,6 +256,41 @@ pub const ClipboardManager = struct {
             self.allocator.free(last);
         }
         self.last_content = try self.allocator.dupe(u8, entry.content);
+
+        // Mark as dirty for batched persistence
+        self.dirty_flag.store(true, .release);
+        self.trySavePersistence();
+
+        ui.printEntries(self);
+    }
+
+    pub fn removeEntry(self: *ClipboardManager, index: usize) !void {
+        if (index == 0 or index > self.entries.items.len) return;
+
+        const real_index = self.entries.items.len - index;
+        const entry_to_remove = self.entries.orderedRemove(real_index);
+        entry_to_remove.free(self.allocator);
+
+        // Mark as dirty for batched persistence
+        self.dirty_flag.store(true, .release);
+        self.trySavePersistence();
+
+        ui.printEntries(self);
+    }
+
+    pub fn clearHistory(self: *ClipboardManager) !void {
+        // Keep only the most recent entry (current clipboard)
+        if (self.entries.items.len <= 1) return; // Nothing to clear
+
+        // Free all entries except the last one (most recent)
+        for (self.entries.items[0 .. self.entries.items.len - 1]) |entry| {
+            entry.free(self.allocator);
+        }
+
+        // Keep only the last entry
+        const current_entry = self.entries.items[self.entries.items.len - 1];
+        self.entries.clearRetainingCapacity();
+        try self.entries.append(current_entry);
 
         // Mark as dirty for batched persistence
         self.dirty_flag.store(true, .release);

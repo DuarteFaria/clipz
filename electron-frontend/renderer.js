@@ -165,9 +165,17 @@ class ClipboardApp {
                         </div>
                         <div class="entry-meta">
                             <span class="entry-time">${timeAgo}</span>
+                            <span class="entry-type">${entry.type}</span>
                         </div>
+                        ${entry.id !== 1 ? `<button class="remove-entry-btn" 
+                                onclick="event.stopPropagation(); app.removeEntry(${entry.id})"
+                                title="Remove this entry">
+                            ×
+                        </button>` : ''}
                     </div>
-                    <div class="entry-content">${this.escapeHtml(entry.content)}</div>
+                    <div class="entry-content">
+                        ${entry.type === 'image' ? this.renderImagePreview(entry.content) : this.escapeHtml(entry.content)}
+                    </div>
                 </div>
             `;
     }).join('');
@@ -202,12 +210,31 @@ class ClipboardApp {
     try {
       const result = await window.electronAPI.clearClipboard();
       if (result.success) {
-        this.updateStatus('Clipboard cleared', 'success');
+        this.updateStatus('History cleared', 'success');
         this.loadClipboardEntries();
       }
     } catch (error) {
-      console.error('Failed to clear clipboard:', error);
-      this.updateStatus('Failed to clear clipboard', 'error');
+      console.error('Failed to clear history:', error);
+      this.updateStatus('Failed to clear history', 'error');
+    }
+  }
+
+  async removeEntry(index) {
+    // Prevent removing the current clipboard (entry #1)
+    if (index === 1) {
+      this.updateStatus('Cannot remove current clipboard', 'error');
+      return;
+    }
+
+    try {
+      const result = await window.electronAPI.removeEntry(index);
+      if (result.success) {
+        this.updateStatus('Entry removed', 'success');
+        this.loadClipboardEntries();
+      }
+    } catch (error) {
+      console.error('Failed to remove entry:', error);
+      this.updateStatus('Failed to remove entry', 'error');
     }
   }
 
@@ -362,6 +389,30 @@ class ClipboardApp {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+  }
+
+  renderImagePreview(imagePath) {
+    // Create image preview with fallback
+    const escapedPath = this.escapeHtml(imagePath);
+    return `
+      <div class="image-entry">
+        <div class="image-preview">
+          <img src="file://${escapedPath}" 
+               alt="Image preview" 
+               onerror="this.style.display='none'; this.nextElementSibling.style.display='block';"
+               class="preview-image">
+          <div class="image-fallback" style="display:none;">
+            <div class="image-icon">🖼️</div>
+            <div class="image-filename">${this.getFileName(escapedPath)}</div>
+          </div>
+        </div>
+        <div class="image-path">${escapedPath}</div>
+      </div>
+    `;
+  }
+
+  getFileName(path) {
+    return path.split('/').pop() || 'Unknown file';
   }
 
   showHotkeyFeedback(index) {

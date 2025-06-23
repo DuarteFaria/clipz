@@ -148,9 +148,22 @@ fn runJsonApi(allocator: std.mem.Allocator, clipboard_manager: *manager.Clipboar
                 } else |_| {
                     try stdout.writeAll("{\"type\":\"error\",\"message\":\"Invalid index\"}\n");
                 }
+            } else if (std.mem.startsWith(u8, trimmed, "remove-entry:")) {
+                const index_str = trimmed["remove-entry:".len..];
+                if (std.fmt.parseInt(usize, index_str, 10)) |index| {
+                    if (clipboard_manager.removeEntry(index)) {
+                        try sendRemoveResult(stdout, index, true);
+                        // Send updated entries to frontend
+                        try sendClipboardEntries(allocator, stdout, clipboard_manager);
+                    } else |_| {
+                        try sendRemoveResult(stdout, index, false);
+                    }
+                } else |_| {
+                    try stdout.writeAll("{\"type\":\"error\",\"message\":\"Invalid index\"}\n");
+                }
             } else if (std.mem.eql(u8, trimmed, "clear")) {
-                clipboard_manager.clean() catch {};
-                try stdout.writeAll("{\"type\":\"success\",\"message\":\"Clipboard cleared\"}\n");
+                clipboard_manager.clearHistory() catch {};
+                try stdout.writeAll("{\"type\":\"success\",\"message\":\"History cleared\"}\n");
             } else {
                 try stdout.writeAll("{\"type\":\"error\",\"message\":\"Unknown command\"}\n");
             }
@@ -184,7 +197,11 @@ fn sendClipboardEntries(allocator: std.mem.Allocator, stdout: std.fs.File, clipb
             }
         }
 
-        const recent_json = try std.fmt.allocPrint(allocator, "{{\"id\":1,\"content\":\"{s}\",\"timestamp\":{d},\"type\":\"text\",\"isCurrent\":true}}", .{ escaped_content_recent.items, most_recent.timestamp * 1000 });
+        const entry_type_str = switch (most_recent.entry_type) {
+            .text => "text",
+            .image => "image",
+        };
+        const recent_json = try std.fmt.allocPrint(allocator, "{{\"id\":1,\"content\":\"{s}\",\"timestamp\":{d},\"type\":\"{s}\",\"isCurrent\":true}}", .{ escaped_content_recent.items, most_recent.timestamp * 1000, entry_type_str });
         defer allocator.free(recent_json);
         try stdout.writeAll(recent_json);
 
@@ -212,7 +229,11 @@ fn sendClipboardEntries(allocator: std.mem.Allocator, stdout: std.fs.File, clipb
                     }
                 }
 
-                const json_entry = try std.fmt.allocPrint(allocator, "{{\"id\":{d},\"content\":\"{s}\",\"timestamp\":{d},\"type\":\"text\",\"isCurrent\":false}}", .{ entry_id, escaped_content.items, entry.timestamp * 1000 });
+                const entry_type_str_history = switch (entry.entry_type) {
+                    .text => "text",
+                    .image => "image",
+                };
+                const json_entry = try std.fmt.allocPrint(allocator, "{{\"id\":{d},\"content\":\"{s}\",\"timestamp\":{d},\"type\":\"{s}\",\"isCurrent\":false}}", .{ entry_id, escaped_content.items, entry.timestamp * 1000, entry_type_str_history });
                 defer allocator.free(json_entry);
 
                 try stdout.writeAll(json_entry);
@@ -234,5 +255,15 @@ fn sendSelectResult(stdout: std.fs.File, index: usize, success: bool) !void {
         try stdout.writeAll(response);
     } else {
         try stdout.writeAll("{\"type\":\"error\",\"message\":\"Failed to select entry\"}\n");
+    }
+}
+
+fn sendRemoveResult(stdout: std.fs.File, index: usize, success: bool) !void {
+    if (success) {
+        const response = try std.fmt.allocPrint(std.heap.page_allocator, "{{\"type\":\"remove-success\",\"index\":{d}}}\n", .{index});
+        defer std.heap.page_allocator.free(response);
+        try stdout.writeAll(response);
+    } else {
+        try stdout.writeAll("{\"type\":\"error\",\"message\":\"Failed to remove entry\"}\n");
     }
 }

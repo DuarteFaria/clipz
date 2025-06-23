@@ -6,6 +6,7 @@ A powerful, lightweight clipboard manager written in Zig with CLI and Electron f
 
 - 📋 **CLI Mode**: Simple command-line interface for clipboard management
 - 🖥️ **Electron Frontend**: Modern GUI with global hotkey support
+- 🖼️ **Image Support**: Automatic detection and preview of copied images (currently works best with local file system images)
 - 🔄 **Automatic Monitoring**: Tracks clipboard changes automatically with adaptive polling
 - 💾 **Persistent Storage**: Saves clipboard history across sessions with batched writes
 - ⌨️ **Global Hotkeys**: Quick access via Cmd+Ctrl+1-9 (Electron frontend)
@@ -13,6 +14,7 @@ A powerful, lightweight clipboard manager written in Zig with CLI and Electron f
 - 🎯 **JSON API**: Integration support for external applications
 - ⚡ **Performance Modes**: Optimized configurations for different use cases
 - 🔋 **Battery Friendly**: Ultra-low resource usage for background operation
+- 🎯 **Smart Type Detection**: Automatically differentiates between text and image clipboard content
 
 ## Performance & Resource Usage
 
@@ -95,6 +97,32 @@ zig build
 # Or use the Electron frontend
 cd electron-frontend && npm start
 ```
+
+## Image Support
+
+Clipz now supports automatic image detection and management:
+
+### 🖼️ How It Works
+
+- **Automatic Detection**: When you copy an image (Cmd+C), Clipz automatically detects if the clipboard contains an image or text
+- **Path Storage**: Instead of copying image files, Clipz stores only the file path, saving disk space
+- **Smart Previews**: The Electron frontend shows mini previews of images with fallback to file names
+- **Duplicate Prevention**: Images are deduplicated based on both content path and type
+- **Cross-Platform**: Uses native macOS `osascript` for improved clipboard handling
+
+### 📸 Supported Workflows
+
+1. **Copy from Finder**: Select an image file and press Cmd+C
+2. **Screenshot Integration**: Works with macOS screenshot tools that save files to disk
+
+> **⚠️ Current Limitation**: Image support currently works best with images that exist as files on your system (e.g., screenshots, files copied from Finder). Images copied directly from browsers or apps without associated file paths may not display previews correctly, though the clipboard content will still be preserved.
+
+### 🎨 Frontend Features
+
+- **Mini Previews**: See thumbnail previews of images in the clipboard history
+- **File Path Display**: Shows the full path to the image file
+- **Type Indicators**: Visual badges distinguish between text and image entries
+- **Error Handling**: Graceful fallback if image files are moved or deleted
 
 ## Usage
 
