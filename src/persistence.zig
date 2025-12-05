@@ -19,8 +19,8 @@ pub const Persistence = struct {
         };
     }
 
-    pub fn saveEntries(self: *Persistence, entries: []const manager.ClipboardEntry) !void {
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    pub fn saveEntries(self: *Persistence, allocator: std.mem.Allocator, entries: []const manager.ClipboardEntry) !void {
+        var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
         const arena_allocator = arena.allocator();
 
@@ -55,8 +55,8 @@ pub const Persistence = struct {
         try file.writeAll(json.items);
     }
 
-    pub fn loadEntries(self: *Persistence) !std.ArrayList(manager.ClipboardEntry) {
-        var entries = std.ArrayList(manager.ClipboardEntry).init(std.heap.page_allocator);
+    pub fn loadEntries(self: *Persistence, allocator: std.mem.Allocator) !std.ArrayList(manager.ClipboardEntry) {
+        var entries = std.ArrayList(manager.ClipboardEntry).init(allocator);
 
         const file = std.fs.cwd().openFile(self.getFilePath(), .{}) catch |err| switch (err) {
             error.FileNotFound => return entries,
@@ -64,11 +64,14 @@ pub const Persistence = struct {
         };
         defer file.close();
 
-        const content = try file.readToEndAlloc(std.heap.page_allocator, std.math.maxInt(usize));
-        defer std.heap.page_allocator.free(content);
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const arena_allocator = arena.allocator();
+
+        const content = try file.readToEndAlloc(arena_allocator, std.math.maxInt(usize));
 
         // Try to parse JSON, but if it fails, return empty entries instead of crashing
-        var parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, content, .{}) catch |err| {
+        var parsed = std.json.parseFromSlice(std.json.Value, arena_allocator, content, .{}) catch |err| {
             std.debug.print("Failed to parse JSON file: {}\n", .{err});
             return entries;
         };
@@ -96,6 +99,8 @@ pub const Persistence = struct {
                         const type_str = type_field.string;
                         if (std.mem.eql(u8, type_str, "image")) {
                             entry_type = .image;
+                        } else if (std.mem.eql(u8, type_str, "file")) {
+                            entry_type = .file;
                         } else {
                             entry_type = .text;
                         }
@@ -103,7 +108,7 @@ pub const Persistence = struct {
                 }
             }
 
-            const content_copy = try std.heap.page_allocator.dupe(u8, content_str);
+            const content_copy = try allocator.dupe(u8, content_str);
             const entry = manager.ClipboardEntry{
                 .content = content_copy,
                 .timestamp = timestamp,

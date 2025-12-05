@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const config = @import("config.zig");
+const image_storage = @import("image_storage.zig");
 
 pub const ClipboardError = error{
     CommandFailed,
@@ -11,6 +12,7 @@ pub const ClipboardError = error{
 pub const ClipboardType = enum {
     text,
     image,
+    file,
 };
 
 pub const ClipboardContent = struct {
@@ -114,6 +116,93 @@ pub fn getContentWithConfig(allocator: std.mem.Allocator, cfg: config.Config) !C
                     }
 
                     // Last resort: we know there's image data but can't get file path or meaningful text
+                    // Get clipboard info to determine format, then save the image to temp storage
+                    const info_result = try std.process.Child.run(.{
+                        .allocator = allocator,
+                        .argv = &[_][]const u8{ "osascript", "-e", "get (clipboard info) as string" },
+                        .max_output_bytes = cfg.max_fetch_size,
+                    });
+                    defer allocator.free(info_result.stderr);
+
+                    if (info_result.term.Exited != 0) {
+                        allocator.free(info_result.stdout);
+                        return ClipboardError.CommandFailed;
+                    }
+
+                    if (info_result.stdout.len == 0) {
+                        allocator.free(info_result.stdout);
+                        return ClipboardError.NoClipboardContent;
+                    }
+
+                    const info_content = std.mem.trim(u8, info_result.stdout, " \t\r\n");
+                    allocator.free(info_result.stdout);
+
+                    // Determine format from clipboard info
+                    var format: []const u8 = "PNG";
+                    if (std.mem.indexOf(u8, info_content, "PNGf") != null) {
+                        format = "PNG";
+                    } else if (std.mem.indexOf(u8, info_content, "JPEG") != null) {
+                        format = "JPEG";
+                    } else if (std.mem.indexOf(u8, info_content, "TIFF") != null) {
+                        format = "TIFF";
+                    }
+
+                    // Try to save the image to temp storage
+                    const saved_path = image_storage.saveImageFromClipboard(allocator, format) catch {
+                        // If saving fails, fall back to label
+                        const format_label = if (std.mem.eql(u8, format, "PNG"))
+                            "PNG Screenshot"
+                        else if (std.mem.eql(u8, format, "JPEG"))
+                            "JPEG Image"
+                        else if (std.mem.eql(u8, format, "TIFF"))
+                            "TIFF Image"
+                        else
+                            "Unknown Image";
+
+                        const content = try std.fmt.allocPrint(allocator, "[📸 {s}]", .{format_label});
+                        return ClipboardContent{
+                            .content = content,
+                            .type = .image,
+                        };
+                    };
+
+                    return ClipboardContent{
+                        .content = saved_path,
+                        .type = .image,
+                    };
+                },
+                .file => {
+                    // First try to get file path (for copied files)
+                    const file_result = try std.process.Child.run(.{
+                        .allocator = allocator,
+                        .argv = &[_][]const u8{ "osascript", "-e", "try\n    set fileURL to (get the clipboard as «class furl»)\n    return POSIX path of fileURL\non error\n    return \"no_file\"\nend try" },
+                        .max_output_bytes = cfg.max_fetch_size,
+                    });
+                    defer allocator.free(file_result.stderr);
+                    defer allocator.free(file_result.stdout);
+
+                    if (file_result.term.Exited == 0) {
+                        const file_content = std.mem.trim(u8, file_result.stdout, " \t\r\n");
+                        if (!std.mem.eql(u8, file_content, "no_file")) {
+                            // We have a file path, return it
+                            const final_content = try allocator.dupe(u8, file_content);
+                            return ClipboardContent{
+                                .content = final_content,
+                                .type = .file,
+                            };
+                        }
+                    }
+
+                    // No file path available. Try to get any text content that might be associated
+                    const text_result = try std.process.Child.run(.{
+                        .allocator = allocator,
+                        .argv = &[_][]const u8{ "osascript", "-e", "try\n    get the clipboard as text\non error\n    return \"no_text\"\nend try" },
+                        .max_output_bytes = cfg.max_fetch_size,
+                    });
+                    defer allocator.free(text_result.stderr);
+                    defer allocator.free(text_result.stdout);
+
+                    // Last resort: we know there's image data but can't get file path or meaningful text
                     // Get clipboard info to determine format, but be more specific
                     const info_result = try std.process.Child.run(.{
                         .allocator = allocator,
@@ -135,25 +224,19 @@ pub fn getContentWithConfig(allocator: std.mem.Allocator, cfg: config.Config) !C
                     const info_content = std.mem.trim(u8, info_result.stdout, " \t\r\n");
 
                     // Determine format from clipboard info with more specific detection
-                    var format: []const u8 = "Unknown Image";
-                    if (std.mem.indexOf(u8, info_content, "PNGf") != null) {
-                        format = "PNG Screenshot";
-                    } else if (std.mem.indexOf(u8, info_content, "JPEG") != null) {
-                        format = "JPEG Image";
-                    } else if (std.mem.indexOf(u8, info_content, "TIFF") != null) {
-                        format = "TIFF Image";
-                    } else if (std.mem.indexOf(u8, info_content, "8BPS") != null) {
-                        format = "Photoshop Image";
-                    } else if (std.mem.indexOf(u8, info_content, "picture") != null) {
-                        format = "Picture";
+                    var format: []const u8 = "Unknown File";
+                    if (std.mem.indexOf(u8, info_content, "pdf") != null) {
+                        format = "PDF Document";
+                    } else if (std.mem.indexOf(u8, info_content, "docx") != null) {
+                        format = "Word Document";
                     }
 
-                    const content = try std.fmt.allocPrint(allocator, "[📸 {s}]", .{format});
+                    const content = try std.fmt.allocPrint(allocator, "[💾 {s}]", .{format});
                     allocator.free(info_result.stdout);
 
                     return ClipboardContent{
                         .content = content,
-                        .type = .image,
+                        .type = .file,
                     };
                 },
             }
@@ -211,14 +294,95 @@ fn getClipboardType(allocator: std.mem.Allocator) !ClipboardType {
     return .text;
 }
 
-pub fn setContent(content: []const u8) !void {
+fn escapeAppleScriptString(allocator: std.mem.Allocator, content: []const u8) ![]const u8 {
+    var escaped = std.ArrayList(u8).init(allocator);
+    errdefer escaped.deinit();
+
+    for (content) |c| {
+        switch (c) {
+            '\\' => try escaped.appendSlice("\\\\"),
+            '"' => try escaped.appendSlice("\\\""),
+            '\n' => try escaped.appendSlice("\\n"),
+            '\r' => try escaped.appendSlice("\\r"),
+            '\t' => try escaped.appendSlice("\\t"),
+            else => {
+                if (c < 0x20) {
+                    try std.fmt.format(escaped.writer(), "\\u{0:0>4}", .{c});
+                } else {
+                    try escaped.append(c);
+                }
+            },
+        }
+    }
+
+    return try escaped.toOwnedSlice();
+}
+
+fn validateFilePath(path: []const u8) bool {
+    if (path.len == 0) return false;
+    if (path.len > 1024) return false;
+
+    for (path) |c| {
+        if (c == 0) return false;
+        if (c < 0x20 and c != '\n' and c != '\r' and c != '\t') return false;
+    }
+
+    if (std.mem.indexOf(u8, path, "..") != null) return false;
+
+    return true;
+}
+
+pub fn setContent(allocator: std.mem.Allocator, content: []const u8) !void {
     switch (builtin.os.tag) {
         .macos => {
+            // Check if this is a temp image path first
+            if (image_storage.isTempImagePath(content)) {
+                if (!validateFilePath(content)) {
+                    return ClipboardError.CommandFailed;
+                }
+
+                const escaped_path = try escapeAppleScriptString(allocator, content);
+                defer allocator.free(escaped_path);
+
+                // Restore image from temp file
+                const script = try std.fmt.allocPrint(allocator,
+                    \\try
+                    \\  set imgFile to POSIX file "{s}"
+                    \\  set the clipboard to (read imgFile as picture)
+                    \\on error
+                    \\  return "failed"
+                    \\end try
+                , .{escaped_path});
+                defer allocator.free(script);
+
+                var child = std.process.Child.init(&[_][]const u8{ "osascript", "-e", script }, allocator);
+                child.stdin_behavior = .Ignore;
+                child.stdout_behavior = .Ignore;
+                child.stderr_behavior = .Ignore;
+
+                try child.spawn();
+                const result = try child.wait();
+                switch (result) {
+                    .Exited => |code| {
+                        if (code == 0) return;
+                    },
+                    else => {},
+                }
+                return ClipboardError.CommandFailed;
+            }
+
             // Check if this is a complete image file path that we should restore as image
             if (isImagePath(content)) {
+                if (!validateFilePath(content)) {
+                    return ClipboardError.CommandFailed;
+                }
+
+                const escaped_path = try escapeAppleScriptString(allocator, content);
+                defer allocator.free(escaped_path);
+
                 // Only try to restore as image if it's a complete, absolute path
                 // and the file actually exists
-                const script = try std.fmt.allocPrint(std.heap.page_allocator,
+                const script = try std.fmt.allocPrint(allocator,
                     \\try
                     \\  set imgFile to POSIX file "{s}"
                     \\  -- Check if file exists before trying to read it
@@ -227,7 +391,7 @@ pub fn setContent(content: []const u8) !void {
                     \\    get info for imgFile
                     \\    set fileExists to true
                     \\  end try
-                    \\  
+                    \\
                     \\  if fileExists then
                     \\    set the clipboard to (read imgFile as picture)
                     \\  else
@@ -236,10 +400,10 @@ pub fn setContent(content: []const u8) !void {
                     \\on error
                     \\  set the clipboard to "{s}"
                     \\end try
-                , .{ content, content, content });
-                defer std.heap.page_allocator.free(script);
+                , .{ escaped_path, escaped_path, escaped_path });
+                defer allocator.free(script);
 
-                var child = std.process.Child.init(&[_][]const u8{ "osascript", "-e", script }, std.heap.page_allocator);
+                var child = std.process.Child.init(&[_][]const u8{ "osascript", "-e", script }, allocator);
                 child.stdin_behavior = .Ignore;
                 child.stdout_behavior = .Ignore;
                 child.stderr_behavior = .Ignore;
@@ -254,22 +418,14 @@ pub fn setContent(content: []const u8) !void {
                 }
             }
 
-            // Set as text content - escape quotes in the content
-            var escaped_content = std.ArrayList(u8).init(std.heap.page_allocator);
-            defer escaped_content.deinit();
+            // Set as text content - properly escape for AppleScript
+            const escaped_content = try escapeAppleScriptString(allocator, content);
+            defer allocator.free(escaped_content);
 
-            for (content) |c| {
-                if (c == '"') {
-                    try escaped_content.appendSlice("\\\"");
-                } else {
-                    try escaped_content.append(c);
-                }
-            }
+            const script = try std.fmt.allocPrint(allocator, "set the clipboard to \"{s}\"", .{escaped_content});
+            defer allocator.free(script);
 
-            const script = try std.fmt.allocPrint(std.heap.page_allocator, "set the clipboard to \"{s}\"", .{escaped_content.items});
-            defer std.heap.page_allocator.free(script);
-
-            var child = std.process.Child.init(&[_][]const u8{ "osascript", "-e", script }, std.heap.page_allocator);
+            var child = std.process.Child.init(&[_][]const u8{ "osascript", "-e", script }, allocator);
             child.stdin_behavior = .Ignore;
             child.stdout_behavior = .Ignore;
             child.stderr_behavior = .Ignore;
@@ -295,9 +451,19 @@ fn isImagePath(content: []const u8) bool {
         return false;
     }
 
+    // Validate file path first
+    if (!validateFilePath(content)) {
+        return false;
+    }
+
     // Only process complete absolute paths that start with /Users/ or /Applications/ etc.
     // This prevents processing partial or corrupted paths
-    if (content.len < 10 or content[0] != '/' or !std.mem.startsWith(u8, content, "/Users/") and !std.mem.startsWith(u8, content, "/Applications/") and !std.mem.startsWith(u8, content, "/System/") and !std.mem.startsWith(u8, content, "/Library/")) {
+    if (content.len < 10 or content[0] != '/' or (!std.mem.startsWith(u8, content, "/Users/") and !std.mem.startsWith(u8, content, "/Applications/") and !std.mem.startsWith(u8, content, "/System/") and !std.mem.startsWith(u8, content, "/Library/"))) {
+        return false;
+    }
+
+    // Additional path traversal check
+    if (std.mem.indexOf(u8, content, "/../") != null or std.mem.indexOf(u8, content, "..") != null) {
         return false;
     }
 

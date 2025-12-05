@@ -3,10 +3,6 @@ const manager = @import("manager.zig");
 const ui = @import("ui.zig");
 const config = @import("config.zig");
 
-const c = @cImport({
-    @cInclude("signal.h");
-});
-
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -129,6 +125,10 @@ fn runJsonApi(allocator: std.mem.Allocator, clipboard_manager: *manager.Clipboar
     var buffer: [1024]u8 = undefined;
     while (true) {
         if (try stdin.reader().readUntilDelimiterOrEof(buffer[0..], '\n')) |line| {
+            if (line.len >= buffer.len - 1) {
+                try stdout.writeAll("{\"type\":\"error\",\"message\":\"Command too long\"}\n");
+                continue;
+            }
             const trimmed = std.mem.trim(u8, line, " \t\r\n");
 
             if (std.mem.eql(u8, trimmed, "quit")) {
@@ -138,31 +138,34 @@ fn runJsonApi(allocator: std.mem.Allocator, clipboard_manager: *manager.Clipboar
             } else if (std.mem.startsWith(u8, trimmed, "select-entry:")) {
                 const index_str = trimmed["select-entry:".len..];
                 if (std.fmt.parseInt(usize, index_str, 10)) |index| {
-                    if (clipboard_manager.selectEntry(index)) {
-                        try sendSelectResult(stdout, index, true);
-                        // Send updated entries to frontend
-                        try sendClipboardEntries(allocator, stdout, clipboard_manager);
-                    } else |_| {
-                        try sendSelectResult(stdout, index, false);
-                    }
+                    clipboard_manager.selectEntry(index) catch |err| {
+                        try stdout.writeAll("{\"type\":\"error\",\"message\":\"Invalid index\"}\n");
+                        return err;
+                    };
+                    try sendSelectResult(allocator, stdout, index, true);
+                    // Send updated entries to frontend
+                    try sendClipboardEntries(allocator, stdout, clipboard_manager);
                 } else |_| {
                     try stdout.writeAll("{\"type\":\"error\",\"message\":\"Invalid index\"}\n");
                 }
             } else if (std.mem.startsWith(u8, trimmed, "remove-entry:")) {
                 const index_str = trimmed["remove-entry:".len..];
                 if (std.fmt.parseInt(usize, index_str, 10)) |index| {
-                    if (clipboard_manager.removeEntry(index)) {
-                        try sendRemoveResult(stdout, index, true);
-                        // Send updated entries to frontend
-                        try sendClipboardEntries(allocator, stdout, clipboard_manager);
-                    } else |_| {
-                        try sendRemoveResult(stdout, index, false);
-                    }
+                    clipboard_manager.removeEntry(index) catch |err| {
+                        try stdout.writeAll("{\"type\":\"error\",\"message\":\"Invalid index\"}\n");
+                        return err;
+                    };
+                    try sendRemoveResult(allocator, stdout, index, true);
+                    // Send updated entries to frontend
+                    try sendClipboardEntries(allocator, stdout, clipboard_manager);
                 } else |_| {
                     try stdout.writeAll("{\"type\":\"error\",\"message\":\"Invalid index\"}\n");
                 }
             } else if (std.mem.eql(u8, trimmed, "clear")) {
-                clipboard_manager.clearHistory() catch {};
+                clipboard_manager.clearHistory() catch |err| {
+                    try stdout.writeAll("{\"type\":\"error\",\"message\":\"Failed to clear history\"}\n");
+                    return err;
+                };
                 try stdout.writeAll("{\"type\":\"success\",\"message\":\"History cleared\"}\n");
             } else {
                 try stdout.writeAll("{\"type\":\"error\",\"message\":\"Unknown command\"}\n");
@@ -200,6 +203,7 @@ fn sendClipboardEntries(allocator: std.mem.Allocator, stdout: std.fs.File, clipb
         const entry_type_str = switch (most_recent.entry_type) {
             .text => "text",
             .image => "image",
+            .file => "file",
         };
         const recent_json = try std.fmt.allocPrint(allocator, "{{\"id\":1,\"content\":\"{s}\",\"timestamp\":{d},\"type\":\"{s}\",\"isCurrent\":true}}", .{ escaped_content_recent.items, most_recent.timestamp * 1000, entry_type_str });
         defer allocator.free(recent_json);
@@ -232,6 +236,7 @@ fn sendClipboardEntries(allocator: std.mem.Allocator, stdout: std.fs.File, clipb
                 const entry_type_str_history = switch (entry.entry_type) {
                     .text => "text",
                     .image => "image",
+                    .file => "file",
                 };
                 const json_entry = try std.fmt.allocPrint(allocator, "{{\"id\":{d},\"content\":\"{s}\",\"timestamp\":{d},\"type\":\"{s}\",\"isCurrent\":false}}", .{ entry_id, escaped_content.items, entry.timestamp * 1000, entry_type_str_history });
                 defer allocator.free(json_entry);
@@ -248,20 +253,20 @@ fn sendClipboardEntries(allocator: std.mem.Allocator, stdout: std.fs.File, clipb
     try stdout.writeAll("]}\n");
 }
 
-fn sendSelectResult(stdout: std.fs.File, index: usize, success: bool) !void {
+fn sendSelectResult(allocator: std.mem.Allocator, stdout: std.fs.File, index: usize, success: bool) !void {
     if (success) {
-        const response = try std.fmt.allocPrint(std.heap.page_allocator, "{{\"type\":\"select-success\",\"index\":{d}}}\n", .{index});
-        defer std.heap.page_allocator.free(response);
+        const response = try std.fmt.allocPrint(allocator, "{{\"type\":\"select-success\",\"index\":{d}}}\n", .{index});
+        defer allocator.free(response);
         try stdout.writeAll(response);
     } else {
         try stdout.writeAll("{\"type\":\"error\",\"message\":\"Failed to select entry\"}\n");
     }
 }
 
-fn sendRemoveResult(stdout: std.fs.File, index: usize, success: bool) !void {
+fn sendRemoveResult(allocator: std.mem.Allocator, stdout: std.fs.File, index: usize, success: bool) !void {
     if (success) {
-        const response = try std.fmt.allocPrint(std.heap.page_allocator, "{{\"type\":\"remove-success\",\"index\":{d}}}\n", .{index});
-        defer std.heap.page_allocator.free(response);
+        const response = try std.fmt.allocPrint(allocator, "{{\"type\":\"remove-success\",\"index\":{d}}}\n", .{index});
+        defer allocator.free(response);
         try stdout.writeAll(response);
     } else {
         try stdout.writeAll("{\"type\":\"error\",\"message\":\"Failed to remove entry\"}\n");
