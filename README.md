@@ -1,15 +1,15 @@
 # Clipz
 
-Clipz is a lightweight clipboard manager with a Zig backend and a native gpui (Rust) frontend. It keeps a small, persistent clipboard history with fast search and macOS-friendly performance.
+Clipz is a native macOS clipboard manager. It maintains a persistent history of text, images, and files you've copied, with a snappy gpui interface and minimal resource usage.
 
 ## Features
 
-- Zig backend with adaptive polling and persistence
-- gpui frontend (macOS) with Zed-inspired layout, search, filtering, select/remove/clear actions
-- Image and file clipboard detection with basic previews
-- JSON API for integrations
-- CLI mode for quick control
-- Configurable performance modes (balanced, low-power, responsive)
+- **Native GUI** — built with Zed's gpui framework for speed and simplicity
+- **Persistent history** — clipboard entries saved to `~/.clipz_history.json`
+- **Image & file support** — automatically detects what you copy
+- **Low overhead** — adaptive polling with balanced/responsive/low-power modes
+- **JSON API** — integrate with scripts and other tools
+- **CLI mode** — quick access from the terminal
 
 ## Quick Start
 
@@ -41,14 +41,16 @@ clipz/
 └── README.md
 ```
 
-## Keyboard
+## Keyboard Shortcuts
 
-- Command palette/search: cmd+f (planned binding in gpui)
-- Entry selection: number bindings forwarded to the backend (handled in gpui)
+- **Arrow Up/Down** — navigate clipboard history
+- **Enter** — select and copy entry to clipboard
+- **Delete** — remove entry from history
+- **Cmd+K** — clear all history
 
-## Image Support
+## Image & File Support
 
-Images are stored as paths where possible; previews work best for files saved on disk (screenshots, Finder copies).
+The app detects and stores images and files from the clipboard. Image previews display inline in the history; file paths show as entries. Both are automatically deduplicated to avoid clutter.
 
 ## Integration
 
