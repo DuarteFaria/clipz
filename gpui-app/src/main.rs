@@ -27,6 +27,7 @@ use {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type")]
+#[allow(dead_code)]
 enum BackendMessage {
     #[serde(rename = "entries")]
     Entries { data: Vec<Entry> },
@@ -735,6 +736,7 @@ impl Render for ClipzApp {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unexpected_cfgs)]
 fn configure_window_for_spaces() {
     unsafe {
         let ns_app: *mut objc::runtime::Object =
