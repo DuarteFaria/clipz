@@ -19,6 +19,12 @@ use gpui::{
 };
 use serde::Deserialize;
 
+#[cfg(target_os = "macos")]
+use {
+    cocoa::appkit::NSWindowCollectionBehavior,
+    objc::{msg_send, sel, sel_impl},
+};
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type")]
 enum BackendMessage {
@@ -112,15 +118,12 @@ impl BackendHandle {
 
 impl Drop for BackendHandle {
     fn drop(&mut self) {
-        // Try to gracefully shut down the backend
         let _ = self.tx.send("quit".into());
         if let Some(mut child) = self.child.take() {
-            // Wait a bit for graceful shutdown, then kill if needed
             thread::sleep(Duration::from_millis(100));
             let _ = child.kill();
             let _ = child.wait();
         }
-        // Exit the app cleanly
         std::process::exit(0);
     }
 }
@@ -179,9 +182,6 @@ fn discover_backend_binary() -> Result<PathBuf> {
     if dev_path.exists() {
         return Ok(dev_path);
     }
-    // In a .app bundle: exe is Contents/MacOS/clipz-gpui
-    // parent() = Contents/MacOS/, parent().parent() = Contents/
-    // Resources/bin/clipz lives at Contents/Resources/bin/clipz
     let packaged = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().and_then(|p| p.parent()).map(|p| p.join("Resources/bin/clipz")));
@@ -201,7 +201,6 @@ fn filename_from_path(path: &str) -> String {
         .to_string()
 }
 
-// Colors
 const BG_BASE: u32 = 0x111111;
 const BG_SURFACE: u32 = 0x1a1a1a;
 const BG_HOVER: u32 = 0x222222;
@@ -222,6 +221,7 @@ struct ClipzApp {
     focused_index: Option<usize>,
     focus_handle: FocusHandle,
     _hotkey_manager: GlobalHotKeyManager,
+    hotkey_rx: Receiver<()>,
 }
 
 impl Focusable for ClipzApp {
@@ -235,26 +235,30 @@ impl ClipzApp {
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle);
 
-        // Register global hotkey: Command+Option+'
         let hotkey_manager = GlobalHotKeyManager::new().expect("failed to create hotkey manager");
-        let hotkey = HotKey::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::Quote);
-        hotkey_manager
-            .register(hotkey)
-            .expect("failed to register hotkey");
+        let hotkey = HotKey::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::Equal);
+        hotkey_manager.register(hotkey).expect("failed to register hotkey");
 
-        // Poll backend every 100ms so the UI updates promptly after backend responses
-        // without requiring mouse movement to trigger a re-render.
-        // Also check for global hotkey events to activate the window.
+        let (hotkey_tx, hotkey_rx) = mpsc::channel::<()>();
+
+        thread::spawn(move || {
+            let receiver = GlobalHotKeyEvent::receiver();
+            loop {
+                if let Ok(event) = receiver.recv() {
+                    if event.state == HotKeyState::Pressed {
+                        let _ = hotkey_tx.send(());
+                    }
+                }
+            }
+        });
+
         cx.spawn(async move |this, cx| loop {
             cx.background_executor()
                 .timer(Duration::from_millis(100))
                 .await;
-            let _ = this.update(cx, |_, cx| {
-                // Drain any pending hotkey events
-                while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
-                    if event.state == HotKeyState::Pressed {
-                        cx.activate(true);
-                    }
+            let _ = this.update(cx, |app, cx| {
+                while app.hotkey_rx.try_recv().is_ok() {
+                    cx.activate(true);
                 }
                 cx.notify();
             });
@@ -269,6 +273,7 @@ impl ClipzApp {
             focused_index: None,
             focus_handle,
             _hotkey_manager: hotkey_manager,
+            hotkey_rx,
         };
 
         if let Some(backend) = &app.backend {
@@ -347,8 +352,6 @@ impl ClipzApp {
 
     fn select_entry(&mut self, id: usize, cx: &mut GpuiContext<Self>) {
         if let Some(backend) = &self.backend {
-            // Don't reorder entries optimistically — that confuses gpui's hover tracking.
-            // Just mark is_current in-place and let the backend response reorder.
             for e in &mut self.entries {
                 e.is_current = e.id == id;
             }
@@ -455,9 +458,7 @@ impl ClipzApp {
             })
             .hover(|style| style.bg(rgb(BG_HOVER)).border_color(rgb(BORDER_SUBTLE)))
             .cursor_pointer()
-            // Left accent stripe for current entry
             .when(is_current, |el| el.border_l_2().border_color(rgb(ACCENT_BLUE)))
-            // Type indicator column
             .child(
                 if entry_type == EntryType::Image && path_exists {
                     let img_path = std::path::Path::new(&image_path);
@@ -485,7 +486,6 @@ impl ClipzApp {
                         )
                 },
             )
-            // Content column
             .child(
                 div()
                     .flex()
@@ -493,7 +493,6 @@ impl ClipzApp {
                     .flex_1()
                     .min_w_0()
                     .gap(px(3.0))
-                    // Main content line
                     .child(
                         div()
                             .text_sm()
@@ -506,7 +505,6 @@ impl ClipzApp {
                             .truncate()
                             .child(display_label),
                     )
-                    // Meta line: type badge + timestamp
                     .child(
                         div()
                             .flex()
@@ -532,7 +530,6 @@ impl ClipzApp {
                             ),
                     ),
             )
-            // Remove button
             .when(id != CURRENT_ENTRY_ID, |el| {
                 el.child(
                     div()
@@ -587,7 +584,6 @@ impl Render for ClipzApp {
         let view_entity = cx.entity();
         let view_clear = view_entity.clone();
 
-        // Ensure our focus handle stays focused (idempotent if already focused)
         window.focus(&self.focus_handle);
 
         div()
@@ -641,7 +637,6 @@ impl Render for ClipzApp {
                     }
                 });
             })
-            // Header
             .child(
                 div()
                     .flex()
@@ -677,7 +672,6 @@ impl Render for ClipzApp {
                             .child(format!("{}", entry_count)),
                     ),
             )
-            // Scrollable entry list
             .child(
                 div()
                     .id(SharedString::from("entry-list"))
@@ -689,7 +683,6 @@ impl Render for ClipzApp {
                     .py_2()
                     .children(entries),
             )
-            // Footer
             .child(
                 div()
                     .flex()
@@ -726,6 +719,30 @@ impl Render for ClipzApp {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn configure_window_for_spaces() {
+    unsafe {
+        let ns_app: *mut objc::runtime::Object = msg_send![
+            objc::class!(NSApplication),
+            sharedApplication
+        ];
+
+        let windows: *mut objc::runtime::Object = msg_send![ns_app, windows];
+        let count: usize = msg_send![windows, count];
+
+        if count > 0 {
+            let window: *mut objc::runtime::Object = msg_send![windows, objectAtIndex: count - 1];
+            let _: () = msg_send![
+                window,
+                setCollectionBehavior: NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace
+            ];
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn configure_window_for_spaces() {}
+
 fn main() {
     Application::new()
         .with_assets(FileSystemAssets)
@@ -735,10 +752,16 @@ fn main() {
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     focus: true,
+                    show: true,
                     ..Default::default()
                 },
                 |window, cx| cx.new(|cx| ClipzApp::new(window, cx)),
             )
             .unwrap();
+
+            #[cfg(target_os = "macos")]
+            configure_window_for_spaces();
+
+            cx.activate(true);
         });
 }
