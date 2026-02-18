@@ -80,21 +80,13 @@ echo "get 1" | ./zig-out/bin/clipz --cli
 echo "clean" | ./zig-out/bin/clipz --cli
 ```
 
-### 2. Electron Frontend (Recommended)
+### 2. gpui Frontend (Recommended, macOS)
 
-Modern GUI with working global hotkeys and system tray integration.
+Native GUI built with gpui. It talks to the JSON API and handles search, selection, removal, and clearing history.
 
 ```bash
-cd electron-frontend
-npm install
-npm start
+cargo run -p clipz-gpui
 ```
-
-Features:
-- ✅ Working global hotkeys (Cmd+Ctrl+1-9)
-- ✅ System tray integration
-- ✅ Real-time clipboard monitoring
-- ✅ Modern, responsive UI
 
 ### 3. JSON API Integration
 
@@ -136,49 +128,6 @@ latest=$(echo "get 1" | ./zig-out/bin/clipz --cli)
 echo "Latest: $latest"
 ```
 
-### System Service (macOS)
-
-Create a Launch Agent plist for the Electron frontend:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.user.clipz</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/local/bin/npm</string>
-        <string>start</string>
-    </array>
-    <key>WorkingDirectory</key>
-    <string>/path/to/clipz/electron-frontend</string>
-    <key>RunAtLoad</key>
-    <true/>
-</dict>
-</plist>
-```
-
-### Electron Frontend
-
-The included Electron frontend demonstrates JSON API integration:
-
-```javascript
-const { spawn } = require('child_process');
-
-const clipz = spawn('./zig-out/bin/clipz', ['--json-api']);
-
-// Send command
-clipz.stdin.write('get-entries\n');
-
-// Handle response
-clipz.stdout.on('data', (data) => {
-  const response = JSON.parse(data.toString());
-  console.log('Clipboard entries:', response.data);
-});
-```
-
 ## Platform Features
 
 ✅ **Core Features (All Platforms)**
@@ -187,12 +136,6 @@ clipz.stdout.on('data', (data) => {
 - ✅ Persistent storage
 - ✅ Multiple run modes (CLI, json-api)
 - ✅ JSON API for integrations
-
-✅ **GUI Features (Electron Frontend)**
-- ✅ Global hotkeys (all platforms)
-- ✅ System tray integration
-- ✅ Modern, responsive UI
-- ✅ Real-time updates
 
 ## Configuration
 
@@ -208,8 +151,6 @@ Usage: clipz [OPTION]
 
 Options:
   -c, --cli       Run in CLI mode (default)
-  -j, --json-api  Run in JSON API mode for Electron integration
+  -j, --json-api  Run in JSON API mode for frontend/integration
   -h, --help      Show this help message
-
-Note: For global hotkeys, use the Electron frontend with 'npm start'
 ```

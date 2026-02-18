@@ -41,6 +41,8 @@ pub const ClipboardManager = struct {
     last_save_time: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
     // Configuration
     config: config.Config,
+    // Callback for notifying when entries change (for JSON API)
+    entries_changed_callback: ?*const fn (*ClipboardManager) void = null,
 
     pub fn init(allocator: std.mem.Allocator, max_entries: usize) !ClipboardManager {
         var cfg = config.Config.default();
@@ -52,7 +54,7 @@ pub const ClipboardManager = struct {
         const pers = try persistence.Persistence.init(allocator);
 
         var manager = ClipboardManager{
-            .entries = std.ArrayList(ClipboardEntry).init(allocator),
+            .entries = std.ArrayList(ClipboardEntry){},
             .allocator = allocator,
             .max_entries = cfg.max_entries,
             .last_content = null,
@@ -67,7 +69,7 @@ pub const ClipboardManager = struct {
 
     pub fn deinit(self: *ClipboardManager) void {
         self.stopMonitoring();
-        std.time.sleep(100 * std.time.ns_per_ms);
+        std.Thread.sleep(100 * std.time.ns_per_ms);
 
         // Force save any pending changes
         self.forceSavePersistence();
@@ -75,7 +77,7 @@ pub const ClipboardManager = struct {
         for (self.entries.items) |entry| {
             entry.free(self.allocator);
         }
-        self.entries.deinit();
+        self.entries.deinit(self.allocator);
         if (self.last_content) |content| {
             self.allocator.free(content);
             self.last_content = null;
@@ -83,8 +85,8 @@ pub const ClipboardManager = struct {
     }
 
     fn loadFromPersistence(self: *ClipboardManager) !void {
-        const loaded_entries = try self.persistence.loadEntries(self.allocator);
-        defer loaded_entries.deinit();
+        var loaded_entries = try self.persistence.loadEntries(self.allocator);
+        defer loaded_entries.deinit(self.allocator);
 
         const start_index = if (loaded_entries.items.len > self.max_entries)
             loaded_entries.items.len - self.max_entries
@@ -98,7 +100,7 @@ pub const ClipboardManager = struct {
                 .timestamp = entry.timestamp,
                 .entry_type = entry.entry_type,
             };
-            try self.entries.append(new_entry);
+            try self.entries.append(self.allocator, new_entry);
         }
     }
 
@@ -148,7 +150,7 @@ pub const ClipboardManager = struct {
             oldest.free(self.allocator);
         }
 
-        try self.entries.append(entry);
+        try self.entries.append(self.allocator, entry);
 
         if (self.last_content) |last| {
             self.allocator.free(last);
@@ -161,6 +163,10 @@ pub const ClipboardManager = struct {
 
         ui.printEntries(self);
         std.debug.print("> ", .{});
+
+        if (self.entries_changed_callback) |callback| {
+            callback(self);
+        }
     }
 
     // Batched persistence - only save if dirty and enough time has passed
@@ -206,13 +212,13 @@ pub const ClipboardManager = struct {
                     consecutive_failures += 1;
                     // Adaptive backoff: increase delay for consecutive failures
                     const delay_ms: u64 = @min(self.config.max_poll_interval, self.config.min_poll_interval + (consecutive_failures * 50));
-                    std.time.sleep(delay_ms * std.time.ns_per_ms);
+                    std.Thread.sleep(delay_ms * std.time.ns_per_ms);
                     continue;
                 },
                 clipboard.ClipboardError.CommandFailed => {
                     consecutive_failures += 1;
                     const delay_ms: u64 = @min(self.config.max_poll_interval, self.config.min_poll_interval + (consecutive_failures * 50));
-                    std.time.sleep(delay_ms * std.time.ns_per_ms);
+                    std.Thread.sleep(delay_ms * std.time.ns_per_ms);
                     continue;
                 },
                 else => return err,
@@ -227,7 +233,7 @@ pub const ClipboardManager = struct {
                     // Same text content, skip
                     self.allocator.free(clipboard_content.content);
                     consecutive_failures = 0;
-                    std.time.sleep(self.config.min_poll_interval * std.time.ns_per_ms);
+                    std.Thread.sleep(self.config.min_poll_interval * std.time.ns_per_ms);
                     continue;
                 }
             }
@@ -262,7 +268,7 @@ pub const ClipboardManager = struct {
             var sleep_count: u32 = 0;
             const chunks = base_delay / 50;
             while (sleep_count < chunks and self.should_monitor.load(.acquire)) {
-                std.time.sleep(50 * std.time.ns_per_ms);
+                std.Thread.sleep(50 * std.time.ns_per_ms);
                 sleep_count += 1;
                 save_counter += 1;
 
@@ -290,7 +296,7 @@ pub const ClipboardManager = struct {
             self.should_monitor.store(false, .release);
 
             // Give the thread a moment to notice the signal
-            std.time.sleep(100 * std.time.ns_per_ms);
+            std.Thread.sleep(100 * std.time.ns_per_ms);
 
             std.debug.print("Waiting for monitor thread to join...\n", .{});
             thread.join();
@@ -310,7 +316,7 @@ pub const ClipboardManager = struct {
         try clipboard.setContent(self.allocator, entry.content);
 
         const selected_entry = self.entries.orderedRemove(real_index);
-        try self.entries.append(selected_entry);
+        try self.entries.append(self.allocator, selected_entry);
 
         if (self.last_content) |last| {
             self.allocator.free(last);
@@ -362,7 +368,7 @@ pub const ClipboardManager = struct {
         // Keep only the last entry
         const current_entry = self.entries.items[self.entries.items.len - 1];
         self.entries.clearRetainingCapacity();
-        try self.entries.append(current_entry);
+        try self.entries.append(self.allocator, current_entry);
 
         // Mark as dirty for batched persistence
         self.dirty_flag.store(true, .release);

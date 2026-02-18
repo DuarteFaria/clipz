@@ -1,264 +1,59 @@
 # Clipz
 
-A powerful, lightweight clipboard manager written in Zig with CLI and Electron frontend interfaces. **Optimized for minimal resource usage and efficient background operation.**
+Clipz is a lightweight clipboard manager with a Zig backend and a native gpui (Rust) frontend. It keeps a small, persistent clipboard history with fast search and macOS-friendly performance.
 
 ## Features
 
-- 📋 **CLI Mode**: Simple command-line interface for clipboard management
-- 🖥️ **Electron Frontend**: Modern GUI with global hotkey support
-- 🖼️ **Image Support**: Automatic detection and preview of copied images (currently works best with local file system images)
-- 🔄 **Automatic Monitoring**: Tracks clipboard changes automatically with adaptive polling
-- 💾 **Persistent Storage**: Saves clipboard history across sessions with batched writes
-- ⌨️ **Global Hotkeys**: Quick access via Cmd+Ctrl+1-9 (Electron frontend)
-- 🧹 **Smart Cleanup**: Manages memory efficiently with configurable limits
-- 🎯 **JSON API**: Integration support for external applications
-- ⚡ **Performance Modes**: Optimized configurations for different use cases
-- 🔋 **Battery Friendly**: Ultra-low resource usage for background operation
-- 🎯 **Smart Type Detection**: Automatically differentiates between text and image clipboard content
-
-## Performance & Resource Usage
-
-### 📊 Background Resource Impact: **MINIMAL**
-
-Clipz is designed to run efficiently in the background without affecting system performance:
-
-| Mode | CPU Usage | RAM Usage | Polling Frequency | Disk I/O | Battery Impact |
-|------|-----------|-----------|-------------------|----------|----------------|
-| **Low Power** | ~0.05% | <3MB | 250ms-1s | Every 30s | **Excellent** |
-| **Balanced** (default) | ~0.1% | <5MB | 100-250ms | Every 5s | **Good** |
-| **Responsive** | ~0.2% | <5MB | 50-150ms | Every 2s | **Fair** |
-
-### 🚀 Key Optimizations
-
-- **Adaptive Polling**: Dynamically adjusts monitoring frequency (50ms to 2s) based on system activity
-- **Batched Persistence**: Reduces disk I/O by 80% with intelligent write batching
-- **Content Size Limiting**: Prevents memory bloat by limiting clipboard entries to 100KB
-- **Smart Duplicate Detection**: Avoids storing identical content multiple times
-- **Exponential Backoff**: Reduces CPU usage during system inactivity
+- Zig backend with adaptive polling and persistence
+- gpui frontend (macOS) with Zed-inspired layout, search, filtering, select/remove/clear actions
+- Image and file clipboard detection with basic previews
+- JSON API for integrations
+- CLI mode for quick control
+- Configurable performance modes (balanced, low-power, responsive)
 
 ## Quick Start
 
-### Electron Frontend (Recommended)
-
+### gpui frontend (macOS)
 ```bash
-cd electron-frontend
-npm install
-npm start  # Runs in optimized low-power mode by default
+cargo run -p clipz-gpui
 ```
+The frontend will launch the Zig backend in JSON API mode automatically.
 
-Features working global hotkeys (cross-platform) and system tray integration.
-
-### CLI Mode
-
+### CLI
 ```bash
-# Default balanced mode
-./zig-out/bin/clipz
-
-# Low power mode (best for battery life)
+zig build
+./zig-out/bin/clipz           # balanced (default)
 ./zig-out/bin/clipz --low-power
-
-# Responsive mode (fastest response)
 ./zig-out/bin/clipz --responsive
 ```
 
-**CLI Commands:**
-- `get` - Show all clipboard entries
-- `get <n>` - Copy entry n to clipboard  
-- `clean` - Clear all entries
-- `exit` - Quit
-
-### JSON API Mode (For Integration)
-
-```bash  
-# Default mode
+### JSON API (for integrations)
+```bash
 ./zig-out/bin/clipz --json-api
-
-# With performance optimization
-./zig-out/bin/clipz --json-api --low-power
 ```
-
-Provides JSON interface for external applications like the Electron frontend.
-
-## Build Instructions
-
-Make sure you have Zig installed (0.13.0 or later):
-
-```bash
-# Clone the repository
-git clone <repository-url>
-cd clipz
-
-# Build the project
-zig build
-
-# Run in CLI mode
-./zig-out/bin/clipz
-
-# Or use the Electron frontend
-cd electron-frontend && npm start
-```
-
-## Image Support
-
-Clipz now supports automatic image detection and management:
-
-### 🖼️ How It Works
-
-- **Automatic Detection**: When you copy an image (Cmd+C), Clipz automatically detects if the clipboard contains an image or text
-- **Path Storage**: Instead of copying image files, Clipz stores only the file path, saving disk space
-- **Smart Previews**: The Electron frontend shows mini previews of images with fallback to file names
-- **Duplicate Prevention**: Images are deduplicated based on both content path and type
-- **Cross-Platform**: Uses native macOS `osascript` for improved clipboard handling
-
-### 📸 Supported Workflows
-
-1. **Copy from Finder**: Select an image file and press Cmd+C
-2. **Screenshot Integration**: Works with macOS screenshot tools that save files to disk
-
-> **⚠️ Current Limitation**: Image support currently works best with images that exist as files on your system (e.g., screenshots, files copied from Finder). Images copied directly from browsers or apps without associated file paths may not display previews correctly, though the clipboard content will still be preserved.
-
-### 🎨 Frontend Features
-
-- **Mini Previews**: See thumbnail previews of images in the clipboard history
-- **File Path Display**: Shows the full path to the image file
-- **Type Indicators**: Visual badges distinguish between text and image entries
-- **Error Handling**: Graceful fallback if image files are moved or deleted
-
-## Usage
-
-### Command Line Arguments
-
-```
-Usage: clipz [OPTIONS]
-
-Mode Options:
-  -c, --cli       Run in CLI mode (default)
-  -j, --json-api  Run in JSON API mode for Electron integration
-
-Performance Options:
-  -l, --low-power     Low power mode (slower polling, longer saves)
-  -r, --responsive    Responsive mode (faster polling, frequent saves)
-  (default)           Balanced mode
-
-Other Options:
-  -h, --help      Show this help message
-
-Performance Modes:
-  - Low Power: 250ms-1s polling, 30s saves (great for battery life)
-  - Balanced:  100ms-250ms polling, 5s saves (default)
-  - Responsive: 50ms-150ms polling, 2s saves (fastest response)
-```
-
-### Performance Mode Details
-
-#### 🔋 Low Power Mode (`--low-power`)
-**Best for**: Laptops, battery-powered devices, background operation
-- **Polling**: 250ms minimum, up to 1 second when inactive
-- **Saves**: Every 30 seconds
-- **Memory**: Uses fewer clipboard entries (configurable)
-- **CPU Impact**: ~0.05%
-
-#### ⚖️ Balanced Mode (default)
-**Best for**: General desktop use, good performance/efficiency balance
-- **Polling**: 100ms minimum, up to 250ms when inactive  
-- **Saves**: Every 5 seconds
-- **Memory**: Standard 10 entries
-- **CPU Impact**: ~0.1%
-
-#### ⚡ Responsive Mode (`--responsive`)
-**Best for**: Heavy clipboard users, development work
-- **Polling**: 50ms minimum, up to 150ms when inactive
-- **Saves**: Every 2 seconds
-- **Memory**: Enhanced monitoring
-- **CPU Impact**: ~0.2%
-
-### Global Hotkeys (Electron Frontend)
-
-The Electron frontend provides working global hotkeys:
-
-- `Cmd+Ctrl+1` through `Cmd+Ctrl+9` (macOS) / `Ctrl+Alt+1-9` (Windows/Linux) - Quick access to clipboard entries 1-9
-- `Cmd+Ctrl+0` (macOS) / `Ctrl+Alt+0` (Windows/Linux) - Access clipboard entry 10
-- `Cmd+Ctrl+Q` (macOS) / `Ctrl+Alt+Q` (Windows/Linux) - Quit application completely
-
-## Performance Monitoring
-
-Monitor your app's resource usage:
-
-```bash
-# Monitor CPU/Memory usage
-top -pid $(pgrep clipz)
-
-# Check file operations  
-sudo fs_usage -w -f filesystem | grep clipz
-
-# Monitor network (should be none)
-lsof -p $(pgrep clipz)
-
-# Run with lower system priority
-nice -n 10 npm start
-```
-
-## Battery Life Recommendations
-
-| Usage Pattern | Battery Impact | Recommended Mode |
-|---------------|----------------|------------------|
-| **Heavy clipboard use** | <1% drain | Responsive mode |
-| **Normal daily use** | <0.5% drain | Balanced mode (default) |
-| **Laptop on battery** | <0.2% drain | Low power mode |
-| **Background only** | Negligible | Low power mode |
 
 ## Project Structure
-
 ```
 clipz/
-├── src/
-│   ├── main.zig          # Main entry point with performance modes
-│   ├── manager.zig       # Clipboard management with adaptive polling
-│   ├── clipboard.zig     # Platform clipboard interface with size limits
-│   ├── ui.zig           # CLI interface
-│   ├── persistence.zig   # Batched data persistence
-│   ├── config.zig       # Performance configuration system
-│   └── command.zig      # Command parsing
-├── electron-frontend/    # Electron GUI application (low-power optimized)
-│   ├── main.js          # Electron main process
-│   ├── renderer.js      # Frontend UI logic
-│   ├── preload.js       # Secure IPC bridge
-│   ├── index.html       # UI markup
-│   ├── styles.css       # UI styling
-│   └── package.json     # Node.js dependencies
-├── build.zig            # Zig build configuration
+├── src/            # Zig backend
+├── gpui-app/       # gpui frontend (Rust)
+├── build.zig
 └── README.md
 ```
 
-## Background Operation
+## Keyboard
 
-**Clipz is designed to be safe for 24/7 background operation:**
+- Command palette/search: cmd+f (planned binding in gpui)
+- Entry selection: number bindings forwarded to the backend (handled in gpui)
 
-✅ **Minimal CPU usage** - Adaptive polling reduces load when inactive  
-✅ **Low memory footprint** - Content size limits prevent bloat  
-✅ **Efficient disk I/O** - Batched writes reduce wear  
-✅ **No network usage** - Pure local operation  
-✅ **Battery friendly** - Multiple power optimization modes  
+## Image Support
 
-The app automatically adjusts its behavior based on system activity and will slow down polling when you're not actively using the clipboard.
+Images are stored as paths where possible; previews work best for files saved on disk (screenshots, Finder copies).
 
 ## Integration
 
-See `INTEGRATION.md` for detailed integration examples including:
-- Shell script integration
-- JSON API usage
-- Custom frontend development
-- Performance optimization for different use cases
-
-**Recommended approach**: Use the Electron frontend for daily use, CLI for automation and scripts.
-
-## Contributing
-
-Contributions welcome! The codebase is now simplified and optimized with:
-1. **CLI mode** - for terminal and automation use
-2. **Electron frontend** - for GUI and global hotkeys  
-3. **Performance configuration system** - for different optimization needs
+See `INTEGRATION.md` for JSON API examples, shell integration, and performance tuning.
 
 ## License
 
-See LICENSE file for details.
+See `LICENSE` for details.

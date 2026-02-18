@@ -295,27 +295,27 @@ fn getClipboardType(allocator: std.mem.Allocator) !ClipboardType {
 }
 
 fn escapeAppleScriptString(allocator: std.mem.Allocator, content: []const u8) ![]const u8 {
-    var escaped = std.ArrayList(u8).init(allocator);
-    errdefer escaped.deinit();
+    var escaped = std.ArrayList(u8){};
+    errdefer escaped.deinit(allocator);
 
     for (content) |c| {
         switch (c) {
-            '\\' => try escaped.appendSlice("\\\\"),
-            '"' => try escaped.appendSlice("\\\""),
-            '\n' => try escaped.appendSlice("\\n"),
-            '\r' => try escaped.appendSlice("\\r"),
-            '\t' => try escaped.appendSlice("\\t"),
+            '\\' => try escaped.appendSlice(allocator, "\\\\"),
+            '"' => try escaped.appendSlice(allocator, "\\\""),
+            '\n' => try escaped.appendSlice(allocator, "\\n"),
+            '\r' => try escaped.appendSlice(allocator, "\\r"),
+            '\t' => try escaped.appendSlice(allocator, "\\t"),
             else => {
                 if (c < 0x20) {
-                    try std.fmt.format(escaped.writer(), "\\u{0:0>4}", .{c});
+                    try std.fmt.format(escaped.writer(allocator), "\\u{0:0>4}", .{c});
                 } else {
-                    try escaped.append(c);
+                    try escaped.append(allocator, c);
                 }
             },
         }
     }
 
-    return try escaped.toOwnedSlice();
+    return try escaped.toOwnedSlice(allocator);
 }
 
 fn validateFilePath(path: []const u8) bool {

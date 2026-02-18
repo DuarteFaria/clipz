@@ -28,7 +28,7 @@ pub fn ensureImageDir() !void {
 
 fn generateImageFilename(allocator: std.mem.Allocator, format: []const u8) ![]const u8 {
     const timestamp = std.time.timestamp();
-    var prng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+    var prng = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
     const random = prng.random().int(u64);
 
     const ext = if (std.mem.eql(u8, format, "PNG") or std.mem.eql(u8, format, "PNGf"))

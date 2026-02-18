@@ -24,8 +24,8 @@ pub const Persistence = struct {
         defer arena.deinit();
         const arena_allocator = arena.allocator();
 
-        var json = std.ArrayList(u8).init(arena_allocator);
-        var writer = json.writer();
+        var json = std.ArrayList(u8){};
+        var writer = json.writer(arena_allocator);
 
         try writer.writeAll("{\n");
         try writer.print("  \"version\": 2,\n", .{});
@@ -33,9 +33,19 @@ pub const Persistence = struct {
 
         for (entries, 0..) |entry, i| {
             try writer.writeAll("    {\n");
-            try writer.writeAll("      \"content\": ");
-            try std.json.encodeJsonString(entry.content, .{}, writer);
-            try writer.writeAll(",\n");
+            try writer.writeAll("      \"content\": \"");
+            for (entry.content) |c| {
+                switch (c) {
+                    '"' => try writer.writeAll("\\\""),
+                    '\\' => try writer.writeAll("\\\\"),
+                    '\n' => try writer.writeAll("\\n"),
+                    '\r' => try writer.writeAll("\\r"),
+                    '\t' => try writer.writeAll("\\t"),
+                    0x00...0x08, 0x0b, 0x0c, 0x0e...0x1f => try writer.print("\\u{0:0>4}", .{c}),
+                    else => try writer.writeByte(c),
+                }
+            }
+            try writer.writeAll("\",\n");
             try writer.print("      \"timestamp\": {d},\n", .{entry.timestamp});
             try writer.print("      \"type\": \"{s}\"\n", .{@tagName(entry.entry_type)});
 
@@ -56,7 +66,7 @@ pub const Persistence = struct {
     }
 
     pub fn loadEntries(self: *Persistence, allocator: std.mem.Allocator) !std.ArrayList(manager.ClipboardEntry) {
-        var entries = std.ArrayList(manager.ClipboardEntry).init(allocator);
+        var entries = std.ArrayList(manager.ClipboardEntry){};
 
         const file = std.fs.cwd().openFile(self.getFilePath(), .{}) catch |err| switch (err) {
             error.FileNotFound => return entries,
@@ -114,7 +124,7 @@ pub const Persistence = struct {
                 .timestamp = timestamp,
                 .entry_type = entry_type,
             };
-            try entries.append(entry);
+            try entries.append(allocator, entry);
         }
 
         return entries;

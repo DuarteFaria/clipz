@@ -110,21 +110,29 @@ fn printUsage() void {
     , .{});
 }
 
+fn sendEntriesCallback(manager_ptr: *manager.ClipboardManager) void {
+    const stdout = std.fs.File.stdout();
+    const allocator = manager_ptr.allocator;
+    sendClipboardEntries(allocator, stdout, manager_ptr) catch {};
+}
+
 // NEW: JSON API mode for Electron communication
 fn runJsonApi(allocator: std.mem.Allocator, clipboard_manager: *manager.ClipboardManager) !void {
     // Start clipboard monitoring in background
     try clipboard_manager.startMonitoring();
     defer clipboard_manager.stopMonitoring();
 
-    const stdin = std.io.getStdIn();
-    const stdout = std.io.getStdOut();
+    const stdin = std.fs.File.stdin();
+    const stdout = std.fs.File.stdout();
+
+    clipboard_manager.entries_changed_callback = sendEntriesCallback;
 
     // Send ready signal
     try stdout.writeAll("{\"type\":\"ready\"}\n");
 
     var buffer: [1024]u8 = undefined;
     while (true) {
-        if (try stdin.reader().readUntilDelimiterOrEof(buffer[0..], '\n')) |line| {
+        if (try stdin.deprecatedReader().readUntilDelimiterOrEof(buffer[0..], '\n')) |line| {
             if (line.len >= buffer.len - 1) {
                 try stdout.writeAll("{\"type\":\"error\",\"message\":\"Command too long\"}\n");
                 continue;
@@ -186,17 +194,17 @@ fn sendClipboardEntries(allocator: std.mem.Allocator, stdout: std.fs.File, clipb
         const most_recent = entries[entries.len - 1];
 
         // Escape JSON string for most recent
-        var escaped_content_recent = std.ArrayList(u8).init(allocator);
-        defer escaped_content_recent.deinit();
+        var escaped_content_recent = std.ArrayList(u8){};
+        defer escaped_content_recent.deinit(allocator);
 
         for (most_recent.content) |char| {
             switch (char) {
-                '"' => try escaped_content_recent.appendSlice("\\\""),
-                '\\' => try escaped_content_recent.appendSlice("\\\\"),
-                '\n' => try escaped_content_recent.appendSlice("\\n"),
-                '\r' => try escaped_content_recent.appendSlice("\\r"),
-                '\t' => try escaped_content_recent.appendSlice("\\t"),
-                else => try escaped_content_recent.append(char),
+                '"' => try escaped_content_recent.appendSlice(allocator, "\\\""),
+                '\\' => try escaped_content_recent.appendSlice(allocator, "\\\\"),
+                '\n' => try escaped_content_recent.appendSlice(allocator, "\\n"),
+                '\r' => try escaped_content_recent.appendSlice(allocator, "\\r"),
+                '\t' => try escaped_content_recent.appendSlice(allocator, "\\t"),
+                else => try escaped_content_recent.append(allocator, char),
             }
         }
 
@@ -219,17 +227,17 @@ fn sendClipboardEntries(allocator: std.mem.Allocator, stdout: std.fs.File, clipb
                 const entry = entries[i];
 
                 // Escape JSON string
-                var escaped_content = std.ArrayList(u8).init(allocator);
-                defer escaped_content.deinit();
+                var escaped_content = std.ArrayList(u8){};
+                defer escaped_content.deinit(allocator);
 
                 for (entry.content) |char| {
                     switch (char) {
-                        '"' => try escaped_content.appendSlice("\\\""),
-                        '\\' => try escaped_content.appendSlice("\\\\"),
-                        '\n' => try escaped_content.appendSlice("\\n"),
-                        '\r' => try escaped_content.appendSlice("\\r"),
-                        '\t' => try escaped_content.appendSlice("\\t"),
-                        else => try escaped_content.append(char),
+                        '"' => try escaped_content.appendSlice(allocator, "\\\""),
+                        '\\' => try escaped_content.appendSlice(allocator, "\\\\"),
+                        '\n' => try escaped_content.appendSlice(allocator, "\\n"),
+                        '\r' => try escaped_content.appendSlice(allocator, "\\r"),
+                        '\t' => try escaped_content.appendSlice(allocator, "\\t"),
+                        else => try escaped_content.append(allocator, char),
                     }
                 }
 

@@ -25,7 +25,7 @@ pub const ClipboardUI = struct {
     }
 
     pub fn run(self: *ClipboardUI) !void {
-        const stdin = std.io.getStdIn();
+        const stdin = std.fs.File.stdin();
         var buffer: [1024]u8 = undefined;
 
         std.debug.print("\x1B[2J\x1B[H", .{});
@@ -35,7 +35,7 @@ pub const ClipboardUI = struct {
 
         while (true) {
             std.debug.print("> ", .{});
-            if (try stdin.reader().readUntilDelimiterOrEof(buffer[0..], '\n')) |user_input| {
+            if (try stdin.deprecatedReader().readUntilDelimiterOrEof(buffer[0..], '\n')) |user_input| {
                 const trimmed = std.mem.trim(u8, user_input, " \t\r\n");
                 if (trimmed.len == 0) continue;
 

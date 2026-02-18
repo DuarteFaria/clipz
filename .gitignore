@@ -1,8 +1,12 @@
-# Zig cache directory
+# Zig cache and build output
 .zig-cache/
-
-# Build output
 zig-out/
+
+# Rust build output
+target/
+
+# Built macOS app bundle
+Clipz.app/
 
 # Editor files
 .vscode/
