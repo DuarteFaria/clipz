@@ -9,12 +9,12 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use global_hotkey::{
-    GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
     hotkey::{Code, HotKey, Modifiers},
+    GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
 };
 use gpui::{
     div, img, prelude::*, px, rgb, rgba, size, App, Application, AssetSource, Bounds,
-    Context as GpuiContext, Focusable, FocusHandle, IntoElement, SharedString, Window,
+    Context as GpuiContext, FocusHandle, Focusable, IntoElement, SharedString, Window,
     WindowBounds, WindowOptions,
 };
 use serde::Deserialize;
@@ -182,9 +182,11 @@ fn discover_backend_binary() -> Result<PathBuf> {
     if dev_path.exists() {
         return Ok(dev_path);
     }
-    let packaged = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().and_then(|p| p.parent()).map(|p| p.join("Resources/bin/clipz")));
+    let packaged = std::env::current_exe().ok().and_then(|exe| {
+        exe.parent()
+            .and_then(|p| p.parent())
+            .map(|p| p.join("Resources/bin/clipz"))
+    });
     if let Some(p) = packaged {
         if p.exists() {
             return Ok(p);
@@ -222,6 +224,7 @@ struct ClipzApp {
     focus_handle: FocusHandle,
     _hotkey_manager: GlobalHotKeyManager,
     hotkey_rx: Receiver<()>,
+    scroll_position: f32,
 }
 
 impl Focusable for ClipzApp {
@@ -237,7 +240,9 @@ impl ClipzApp {
 
         let hotkey_manager = GlobalHotKeyManager::new().expect("failed to create hotkey manager");
         let hotkey = HotKey::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::Equal);
-        hotkey_manager.register(hotkey).expect("failed to register hotkey");
+        hotkey_manager
+            .register(hotkey)
+            .expect("failed to register hotkey");
 
         let (hotkey_tx, hotkey_rx) = mpsc::channel::<()>();
 
@@ -274,6 +279,7 @@ impl ClipzApp {
             focus_handle,
             _hotkey_manager: hotkey_manager,
             hotkey_rx,
+            scroll_position: 0.0,
         };
 
         if let Some(backend) = &app.backend {
@@ -294,8 +300,11 @@ impl ClipzApp {
                         if let Some(idx) = self.focused_index {
                             let filtered = self.filtered();
                             if idx >= filtered.len() {
-                                self.focused_index =
-                                    if filtered.is_empty() { None } else { Some(filtered.len() - 1) };
+                                self.focused_index = if filtered.is_empty() {
+                                    None
+                                } else {
+                                    Some(filtered.len() - 1)
+                                };
                             }
                         }
                     }
@@ -327,6 +336,18 @@ impl ClipzApp {
     fn refresh_entries(&self, backend: &BackendHandle) {
         if let Err(e) = backend.send("get-entries") {
             eprintln!("Failed to refresh entries: {}", e);
+        }
+    }
+
+    fn update_scroll_to_focused(&mut self) {
+        if let Some(idx) = self.focused_index {
+            const ENTRY_HEIGHT: f32 = 56.0;
+            const VISIBLE_HEIGHT: f32 = 350.0;
+            const CENTER_OFFSET: f32 = VISIBLE_HEIGHT / 2.0;
+
+            let entry_top = idx as f32 * ENTRY_HEIGHT;
+
+            self.scroll_position = (entry_top - CENTER_OFFSET).max(0.0);
         }
     }
 
@@ -395,7 +416,7 @@ impl ClipzApp {
         idx: usize,
         focused_index: Option<usize>,
         view_entity: gpui::Entity<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + 'static {
         let id = entry.id;
         let content = entry.content.clone();
         let view = view_entity.clone();
@@ -434,7 +455,7 @@ impl ClipzApp {
         let row_bg = if is_current {
             rgb(BG_ACTIVE)
         } else if is_focused {
-            rgb(BG_HOVER)
+            rgb(0x2a4a5a) // More visible blue highlight when focused
         } else {
             rgba(0x00000000)
         };
@@ -458,34 +479,29 @@ impl ClipzApp {
             })
             .hover(|style| style.bg(rgb(BG_HOVER)).border_color(rgb(BORDER_SUBTLE)))
             .cursor_pointer()
-            .when(is_current, |el| el.border_l_2().border_color(rgb(ACCENT_BLUE)))
-            .child(
-                if entry_type == EntryType::Image && path_exists {
-                    let img_path = std::path::Path::new(&image_path);
-                    div()
-                        .size(px(36.0))
-                        .rounded_md()
-                        .overflow_hidden()
-                        .flex_shrink_0()
-                        .bg(rgb(BG_SURFACE))
-                        .child(img(img_path).size(px(36.0)))
-                } else {
-                    div()
-                        .size(px(36.0))
-                        .rounded_md()
-                        .bg(rgb(BG_SURFACE))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .flex_shrink_0()
-                        .child(
-                            div()
-                                .size(px(10.0))
-                                .rounded_full()
-                                .bg(icon_color),
-                        )
-                },
-            )
+            .when(is_current, |el| {
+                el.border_l_2().border_color(rgb(ACCENT_BLUE))
+            })
+            .child(if entry_type == EntryType::Image && path_exists {
+                let img_path = std::path::Path::new(&image_path);
+                div()
+                    .size(px(36.0))
+                    .rounded_md()
+                    .overflow_hidden()
+                    .flex_shrink_0()
+                    .bg(rgb(BG_SURFACE))
+                    .child(img(img_path).size(px(36.0)))
+            } else {
+                div()
+                    .size(px(36.0))
+                    .rounded_md()
+                    .bg(rgb(BG_SURFACE))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .flex_shrink_0()
+                    .child(div().size(px(10.0)).rounded_full().bg(icon_color))
+            })
             .child(
                 div()
                     .flex()
@@ -510,12 +526,7 @@ impl ClipzApp {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(
-                                div()
-                                    .text_color(icon_color)
-                                    .text_xs()
-                                    .child(type_label),
-                            )
+                            .child(div().text_color(icon_color).text_xs().child(type_label))
                             .child(
                                 div()
                                     .text_xs()
@@ -599,10 +610,9 @@ impl Render for ClipzApp {
                     if filtered.is_empty() {
                         return;
                     }
-                    let key_str = evt.keystroke.key.to_string();
-                    let key_lower = key_str.to_lowercase();
-                    match key_lower.as_str() {
-                        "arrowup" | "up" => {
+                    let key_str = format!("{:?}", evt.keystroke.key).to_lowercase();
+                    match key_str.as_str() {
+                        "\"up\"" | "\"arrowup\"" | "up" | "arrowup" => {
                             if let Some(current_idx) = this.focused_index {
                                 if current_idx > 0 {
                                     this.focused_index = Some(current_idx - 1);
@@ -612,9 +622,10 @@ impl Render for ClipzApp {
                             } else {
                                 this.focused_index = Some(0);
                             }
+                            this.update_scroll_to_focused();
                             cx.notify();
                         }
-                        "arrowdown" | "down" => {
+                        "\"down\"" | "\"arrowdown\"" | "down" | "arrowdown" => {
                             if let Some(current_idx) = this.focused_index {
                                 if current_idx < filtered.len() - 1 {
                                     this.focused_index = Some(current_idx + 1);
@@ -624,9 +635,10 @@ impl Render for ClipzApp {
                             } else {
                                 this.focused_index = Some(0);
                             }
+                            this.update_scroll_to_focused();
                             cx.notify();
                         }
-                        "enter" | "return" => {
+                        "\"enter\"" | "enter" | "\"return\"" | "return" => {
                             if let Some(idx) = this.focused_index {
                                 if let Some(entry) = filtered.get(idx) {
                                     this.select_entry(entry.id, cx);
@@ -649,17 +661,13 @@ impl Render for ClipzApp {
                     .border_color(rgb(BORDER_SUBTLE))
                     .flex_shrink_0()
                     .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .text_base()
-                                    .font_weight(gpui::FontWeight::BOLD)
-                                    .text_color(rgb(TEXT_PRIMARY))
-                                    .child("Clipz"),
-                            ),
+                        div().flex().items_center().gap_2().child(
+                            div()
+                                .text_base()
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .text_color(rgb(TEXT_PRIMARY))
+                                .child("Clipz"),
+                        ),
                     )
                     .child(
                         div()
@@ -681,7 +689,14 @@ impl Render for ClipzApp {
                     .min_h_0()
                     .overflow_y_scroll()
                     .py_2()
-                    .children(entries),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .w_full()
+                            .children(entries)
+                            .mt(px(-self.scroll_position)),
+                    ),
             )
             .child(
                 div()
@@ -722,10 +737,8 @@ impl Render for ClipzApp {
 #[cfg(target_os = "macos")]
 fn configure_window_for_spaces() {
     unsafe {
-        let ns_app: *mut objc::runtime::Object = msg_send![
-            objc::class!(NSApplication),
-            sharedApplication
-        ];
+        let ns_app: *mut objc::runtime::Object =
+            msg_send![objc::class!(NSApplication), sharedApplication];
 
         let windows: *mut objc::runtime::Object = msg_send![ns_app, windows];
         let count: usize = msg_send![windows, count];
