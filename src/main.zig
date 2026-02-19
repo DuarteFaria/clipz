@@ -134,6 +134,8 @@ fn runJsonApi(allocator: std.mem.Allocator, clipboard_manager: *manager.Clipboar
     while (true) {
         if (try stdin.deprecatedReader().readUntilDelimiterOrEof(buffer[0..], '\n')) |line| {
             if (line.len >= buffer.len - 1) {
+                clipboard_manager.stdout_mutex.lock();
+                defer clipboard_manager.stdout_mutex.unlock();
                 try stdout.writeAll("{\"type\":\"error\",\"message\":\"Command too long\"}\n");
                 continue;
             }
@@ -142,40 +144,60 @@ fn runJsonApi(allocator: std.mem.Allocator, clipboard_manager: *manager.Clipboar
             if (std.mem.eql(u8, trimmed, "quit")) {
                 break;
             } else if (std.mem.eql(u8, trimmed, "get-entries")) {
+                clipboard_manager.stdout_mutex.lock();
+                defer clipboard_manager.stdout_mutex.unlock();
                 try sendClipboardEntries(allocator, stdout, clipboard_manager);
             } else if (std.mem.startsWith(u8, trimmed, "select-entry:")) {
                 const index_str = trimmed["select-entry:".len..];
                 if (std.fmt.parseInt(usize, index_str, 10)) |index| {
-                    clipboard_manager.selectEntry(index) catch |err| {
+                    clipboard_manager.selectEntry(index) catch {
+                        clipboard_manager.stdout_mutex.lock();
+                        defer clipboard_manager.stdout_mutex.unlock();
                         try stdout.writeAll("{\"type\":\"error\",\"message\":\"Invalid index\"}\n");
-                        return err;
+                        continue;
                     };
+                    clipboard_manager.stdout_mutex.lock();
+                    defer clipboard_manager.stdout_mutex.unlock();
                     try sendSelectResult(allocator, stdout, index, true);
                     // Send updated entries to frontend
                     try sendClipboardEntries(allocator, stdout, clipboard_manager);
                 } else |_| {
+                    clipboard_manager.stdout_mutex.lock();
+                    defer clipboard_manager.stdout_mutex.unlock();
                     try stdout.writeAll("{\"type\":\"error\",\"message\":\"Invalid index\"}\n");
                 }
             } else if (std.mem.startsWith(u8, trimmed, "remove-entry:")) {
                 const index_str = trimmed["remove-entry:".len..];
                 if (std.fmt.parseInt(usize, index_str, 10)) |index| {
-                    clipboard_manager.removeEntry(index) catch |err| {
+                    clipboard_manager.removeEntry(index) catch {
+                        clipboard_manager.stdout_mutex.lock();
+                        defer clipboard_manager.stdout_mutex.unlock();
                         try stdout.writeAll("{\"type\":\"error\",\"message\":\"Invalid index\"}\n");
-                        return err;
+                        continue;
                     };
+                    clipboard_manager.stdout_mutex.lock();
+                    defer clipboard_manager.stdout_mutex.unlock();
                     try sendRemoveResult(allocator, stdout, index, true);
                     // Send updated entries to frontend
                     try sendClipboardEntries(allocator, stdout, clipboard_manager);
                 } else |_| {
+                    clipboard_manager.stdout_mutex.lock();
+                    defer clipboard_manager.stdout_mutex.unlock();
                     try stdout.writeAll("{\"type\":\"error\",\"message\":\"Invalid index\"}\n");
                 }
             } else if (std.mem.eql(u8, trimmed, "clear")) {
-                clipboard_manager.clearHistory() catch |err| {
+                clipboard_manager.clearHistory() catch {
+                    clipboard_manager.stdout_mutex.lock();
+                    defer clipboard_manager.stdout_mutex.unlock();
                     try stdout.writeAll("{\"type\":\"error\",\"message\":\"Failed to clear history\"}\n");
-                    return err;
+                    continue;
                 };
+                clipboard_manager.stdout_mutex.lock();
+                defer clipboard_manager.stdout_mutex.unlock();
                 try stdout.writeAll("{\"type\":\"success\",\"message\":\"History cleared\"}\n");
             } else {
+                clipboard_manager.stdout_mutex.lock();
+                defer clipboard_manager.stdout_mutex.unlock();
                 try stdout.writeAll("{\"type\":\"error\",\"message\":\"Unknown command\"}\n");
             }
         } else {

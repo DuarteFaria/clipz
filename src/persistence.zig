@@ -78,7 +78,7 @@ pub const Persistence = struct {
         defer arena.deinit();
         const arena_allocator = arena.allocator();
 
-        const content = try file.readToEndAlloc(arena_allocator, std.math.maxInt(usize));
+        const content = try file.readToEndAlloc(arena_allocator, 10 * 1024 * 1024);
 
         // Try to parse JSON, but if it fails, return empty entries instead of crashing
         var parsed = std.json.parseFromSlice(std.json.Value, arena_allocator, content, .{}) catch |err| {

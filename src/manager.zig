@@ -43,6 +43,8 @@ pub const ClipboardManager = struct {
     config: config.Config,
     // Callback for notifying when entries change (for JSON API)
     entries_changed_callback: ?*const fn (*ClipboardManager) void = null,
+    // Mutex for thread-safe stdout writes (used in JSON API mode)
+    stdout_mutex: std.Thread.Mutex = .{},
 
     pub fn init(allocator: std.mem.Allocator, max_entries: usize) !ClipboardManager {
         var cfg = config.Config.default();
@@ -69,7 +71,6 @@ pub const ClipboardManager = struct {
 
     pub fn deinit(self: *ClipboardManager) void {
         self.stopMonitoring();
-        std.Thread.sleep(100 * std.time.ns_per_ms);
 
         // Force save any pending changes
         self.forceSavePersistence();
@@ -92,6 +93,11 @@ pub const ClipboardManager = struct {
             loaded_entries.items.len - self.max_entries
         else
             0;
+
+        // Free content of entries we're skipping (before start_index)
+        for (loaded_entries.items[0..start_index]) |entry| {
+            self.allocator.free(entry.content);
+        }
 
         for (loaded_entries.items[start_index..]) |entry| {
             const content_copy = try self.allocator.dupe(u8, entry.content);
@@ -161,11 +167,14 @@ pub const ClipboardManager = struct {
         self.dirty_flag.store(true, .release);
         self.trySavePersistence();
 
-        ui.printEntries(self);
-        std.debug.print("> ", .{});
-
         if (self.entries_changed_callback) |callback| {
+            self.stdout_mutex.lock();
+            defer self.stdout_mutex.unlock();
             callback(self);
+        } else {
+            // CLI mode only — don't pollute stdout in JSON API mode
+            ui.printEntries(self);
+            std.debug.print("> ", .{});
         }
     }
 
@@ -239,12 +248,12 @@ pub const ClipboardManager = struct {
             }
 
             // For images: check if we just added an image very recently (within 5 seconds)
-            // This prevents rapid-fire processing, but we'll still do content comparison in addEntry
+            // This prevents rapid-fire processing of the same image
             if (clipboard_content.type == .image) {
                 if ((now - last_image_add_time) < 5) {
-                    // Very recent image add, likely the same image still in clipboard
-                    // But we'll still process it and let addEntry do the file comparison
-                    // This ensures we catch it even if the cooldown expires
+                    self.allocator.free(clipboard_content.content);
+                    std.Thread.sleep(self.config.min_poll_interval * std.time.ns_per_ms);
+                    continue;
                 }
             }
 
@@ -255,10 +264,10 @@ pub const ClipboardManager = struct {
                 last_image_add_time = now;
             }
             consecutive_failures = 0; // Reset on success
-            last_change_time = std.time.timestamp();
 
             // Adaptive sleep: longer delays when inactive (configurable)
             const time_since_change = std.time.timestamp() - last_change_time;
+            last_change_time = std.time.timestamp();
             const base_delay: u64 = if (time_since_change > self.config.inactive_threshold)
                 self.config.max_poll_interval
             else

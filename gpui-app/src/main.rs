@@ -558,6 +558,7 @@ impl ClipzApp {
                         .text_sm()
                         .child("\u{00d7}")
                         .on_click(move |_, _, app| {
+                            app.stop_propagation();
                             view_remove.update(app, |this, cx| {
                                 this.remove(id, cx);
                             });

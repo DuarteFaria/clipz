@@ -123,19 +123,17 @@ pub fn getContentWithConfig(allocator: std.mem.Allocator, cfg: config.Config) !C
                         .max_output_bytes = cfg.max_fetch_size,
                     });
                     defer allocator.free(info_result.stderr);
+                    defer allocator.free(info_result.stdout);
 
                     if (info_result.term.Exited != 0) {
-                        allocator.free(info_result.stdout);
                         return ClipboardError.CommandFailed;
                     }
 
                     if (info_result.stdout.len == 0) {
-                        allocator.free(info_result.stdout);
                         return ClipboardError.NoClipboardContent;
                     }
 
                     const info_content = std.mem.trim(u8, info_result.stdout, " \t\r\n");
-                    allocator.free(info_result.stdout);
 
                     // Determine format from clipboard info
                     var format: []const u8 = "PNG";
@@ -210,14 +208,13 @@ pub fn getContentWithConfig(allocator: std.mem.Allocator, cfg: config.Config) !C
                         .max_output_bytes = cfg.max_fetch_size,
                     });
                     defer allocator.free(info_result.stderr);
+                    defer allocator.free(info_result.stdout);
 
                     if (info_result.term.Exited != 0) {
-                        allocator.free(info_result.stdout);
                         return ClipboardError.CommandFailed;
                     }
 
                     if (info_result.stdout.len == 0) {
-                        allocator.free(info_result.stdout);
                         return ClipboardError.NoClipboardContent;
                     }
 
@@ -232,7 +229,6 @@ pub fn getContentWithConfig(allocator: std.mem.Allocator, cfg: config.Config) !C
                     }
 
                     const content = try std.fmt.allocPrint(allocator, "[💾 {s}]", .{format});
-                    allocator.free(info_result.stdout);
 
                     return ClipboardContent{
                         .content = content,

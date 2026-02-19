@@ -27,7 +27,6 @@ pub const ClipboardUI = struct {
     pub fn run(self: *ClipboardUI) !void {
         const stdin = std.fs.File.stdin();
         var buffer: [1024]u8 = undefined;
-
         std.debug.print("\x1B[2J\x1B[H", .{});
         std.debug.print("Clipz - Interactive Mode\n", .{});
         printHelp();
