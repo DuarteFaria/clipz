@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)]
+
 use std::{
     io::{BufRead, BufReader, Write},
     path::PathBuf,
@@ -62,6 +64,8 @@ enum EntryType {
     Text,
     Image,
     File,
+    Url,
+    Color,
 }
 
 impl Default for EntryType {
@@ -204,6 +208,25 @@ fn filename_from_path(path: &str) -> String {
         .to_string()
 }
 
+fn parse_hex_color(s: &str) -> Option<u32> {
+    let s = s.trim();
+    let hex = s.strip_prefix('#')?;
+    match hex.len() {
+        3 => {
+            // #RGB → #RRGGBB
+            let r = u8::from_str_radix(&hex[0..1], 16).ok()?;
+            let g = u8::from_str_radix(&hex[1..2], 16).ok()?;
+            let b = u8::from_str_radix(&hex[2..3], 16).ok()?;
+            Some(((r * 17) as u32) << 16 | ((g * 17) as u32) << 8 | (b * 17) as u32)
+        }
+        6 | 8 => {
+            // #RRGGBB or #RRGGBBAA — ignore alpha, take first 6
+            u32::from_str_radix(&hex[..6], 16).ok()
+        }
+        _ => None,
+    }
+}
+
 const BG_BASE: u32 = 0x111111;
 const BG_SURFACE: u32 = 0x1a1a1a;
 const BG_HOVER: u32 = 0x222222;
@@ -215,6 +238,8 @@ const TEXT_MUTED: u32 = 0x555555;
 const ACCENT_BLUE: u32 = 0x5ac8fa;
 const ACCENT_ORANGE: u32 = 0xff9f0a;
 const ACCENT_GREEN: u32 = 0x30d158;
+const ACCENT_PURPLE: u32 = 0xbf5af2;
+const ACCENT_PINK: u32 = 0xff375f;
 const DANGER: u32 = 0xff453a;
 
 struct ClipzApp {
@@ -434,12 +459,16 @@ impl ClipzApp {
             EntryType::Text => rgb(ACCENT_BLUE),
             EntryType::Image => rgb(ACCENT_ORANGE),
             EntryType::File => rgb(ACCENT_GREEN),
+            EntryType::Url => rgb(ACCENT_PURPLE),
+            EntryType::Color => rgb(ACCENT_PINK),
         };
 
         let type_label = match entry.entry_type {
             EntryType::Text => "Text",
             EntryType::Image => "Image",
             EntryType::File => "File",
+            EntryType::Url => "URL",
+            EntryType::Color => "Color",
         };
 
         let display_label: String = match entry_type {
@@ -450,7 +479,7 @@ impl ClipzApp {
                     content.clone()
                 }
             }
-            EntryType::Text => content.clone(),
+            EntryType::Text | EntryType::Url | EntryType::Color => content.clone(),
         };
 
         let row_bg = if is_current {
@@ -492,6 +521,24 @@ impl ClipzApp {
                     .flex_shrink_0()
                     .bg(rgb(BG_SURFACE))
                     .child(img(img_path).size(px(36.0)))
+            } else if entry_type == EntryType::Color {
+                let swatch_color = parse_hex_color(&content).unwrap_or(ACCENT_PINK);
+                div()
+                    .size(px(36.0))
+                    .rounded_md()
+                    .bg(rgb(BG_SURFACE))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .flex_shrink_0()
+                    .child(
+                        div()
+                            .size(px(22.0))
+                            .rounded_md()
+                            .bg(rgb(swatch_color))
+                            .border_1()
+                            .border_color(rgba(0xffffff30)),
+                    )
             } else {
                 div()
                     .size(px(36.0))

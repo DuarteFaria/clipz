@@ -111,6 +111,10 @@ pub const Persistence = struct {
                             entry_type = .image;
                         } else if (std.mem.eql(u8, type_str, "file")) {
                             entry_type = .file;
+                        } else if (std.mem.eql(u8, type_str, "url")) {
+                            entry_type = .url;
+                        } else if (std.mem.eql(u8, type_str, "color")) {
+                            entry_type = .color;
                         } else {
                             entry_type = .text;
                         }

@@ -234,6 +234,8 @@ fn sendClipboardEntries(allocator: std.mem.Allocator, stdout: std.fs.File, clipb
             .text => "text",
             .image => "image",
             .file => "file",
+            .url => "url",
+            .color => "color",
         };
         const recent_json = try std.fmt.allocPrint(allocator, "{{\"id\":1,\"content\":\"{s}\",\"timestamp\":{d},\"type\":\"{s}\",\"isCurrent\":true}}", .{ escaped_content_recent.items, most_recent.timestamp * 1000, entry_type_str });
         defer allocator.free(recent_json);
@@ -267,6 +269,8 @@ fn sendClipboardEntries(allocator: std.mem.Allocator, stdout: std.fs.File, clipb
                     .text => "text",
                     .image => "image",
                     .file => "file",
+                    .url => "url",
+                    .color => "color",
                 };
                 const json_entry = try std.fmt.allocPrint(allocator, "{{\"id\":{d},\"content\":\"{s}\",\"timestamp\":{d},\"type\":\"{s}\",\"isCurrent\":false}}", .{ entry_id, escaped_content.items, entry.timestamp * 1000, entry_type_str_history });
                 defer allocator.free(json_entry);

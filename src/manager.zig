@@ -129,12 +129,9 @@ pub const ClipboardManager = struct {
         // Special handling for images: check if we already have the same image
         // by comparing file contents (since file paths are always unique)
         if (clipboard_content.type == .image and image_storage.isTempImagePath(clipboard_content.content)) {
-            const now = std.time.timestamp();
-            // Check recent image entries (within last 30 seconds)
             for (self.entries.items) |existing_entry| {
                 if (existing_entry.entry_type == .image and
-                    image_storage.isTempImagePath(existing_entry.content) and
-                    (now - existing_entry.timestamp) < 30)
+                    image_storage.isTempImagePath(existing_entry.content))
                 {
                     // Compare the image files to see if they're the same
                     if (image_storage.compareImageFiles(existing_entry.content, clipboard_content.content) catch false) {
@@ -213,7 +210,6 @@ pub const ClipboardManager = struct {
         var consecutive_failures: u32 = 0;
         var last_change_time: i64 = std.time.timestamp();
         var save_counter: u32 = 0;
-        var last_image_add_time: i64 = 0;
 
         while (self.should_monitor.load(.acquire)) {
             const clipboard_content = clipboard.getContent(self.allocator) catch |err| switch (err) {
@@ -234,35 +230,34 @@ pub const ClipboardManager = struct {
             };
 
             // Check if clipboard content has actually changed
-            const now = std.time.timestamp();
 
-            // For text: check if content matches last_content
             if (self.last_content) |last| {
-                if (clipboard_content.type == .text and std.mem.eql(u8, last, clipboard_content.content)) {
-                    // Same text content, skip
+                if (std.mem.eql(u8, last, clipboard_content.content)) {
+                    // Same content string (works for text; also for images with stable paths)
                     self.allocator.free(clipboard_content.content);
                     consecutive_failures = 0;
                     std.Thread.sleep(self.config.min_poll_interval * std.time.ns_per_ms);
                     continue;
                 }
-            }
 
-            // For images: check if we just added an image very recently (within 5 seconds)
-            // This prevents rapid-fire processing of the same image
-            if (clipboard_content.type == .image) {
-                if ((now - last_image_add_time) < 5) {
-                    self.allocator.free(clipboard_content.content);
-                    std.Thread.sleep(self.config.min_poll_interval * std.time.ns_per_ms);
-                    continue;
+                // For images saved to temp files, paths are always unique so compare file contents
+                if (clipboard_content.type == .image and
+                    image_storage.isTempImagePath(clipboard_content.content) and
+                    image_storage.isTempImagePath(last))
+                {
+                    if (image_storage.compareImageFiles(last, clipboard_content.content) catch false) {
+                        // Same image data, delete the new temp file and skip
+                        image_storage.deleteImageFile(clipboard_content.content) catch {};
+                        self.allocator.free(clipboard_content.content);
+                        consecutive_failures = 0;
+                        std.Thread.sleep(self.config.min_poll_interval * std.time.ns_per_ms);
+                        continue;
+                    }
                 }
             }
 
             try self.addEntry(clipboard_content);
 
-            // Track when we last added an image
-            if (clipboard_content.type == .image) {
-                last_image_add_time = now;
-            }
             consecutive_failures = 0; // Reset on success
 
             // Adaptive sleep: longer delays when inactive (configurable)
@@ -322,7 +317,7 @@ pub const ClipboardManager = struct {
         const real_index = self.entries.items.len - index;
         const entry = self.entries.items[real_index];
 
-        try clipboard.setContent(self.allocator, entry.content);
+        try clipboard.setContentWithType(self.allocator, entry.content, entry.entry_type);
 
         const selected_entry = self.entries.orderedRemove(real_index);
         try self.entries.append(self.allocator, selected_entry);
