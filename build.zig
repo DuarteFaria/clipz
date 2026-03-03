@@ -16,12 +16,6 @@ pub fn build(b: *std.Build) void {
         .root_module = exe_mod,
     });
 
-    exe.linkSystemLibrary("SDL2");
-    exe.linkSystemLibrary("SDL2_ttf");
-    exe.linkLibC();
-    exe.addIncludePath(.{ .cwd_relative = "/opt/homebrew/include" });
-    exe.addIncludePath(.{ .cwd_relative = "/opt/homebrew/include/SDL2" });
-
     b.installArtifact(exe);
 
     // ── Run step ──────────────────────────────────────────────────────────────
