@@ -54,7 +54,7 @@ open Clipz.dmg
 
 ## Releasing a New Version
 
-1. Update the version in `gpui-app/Info.plist` and `HomebrewFormula/clipz.rb`
+1. Update the version in `gpui-app/Info.plist` and `Casks/clipz.rb`
 2. Commit and tag:
    ```bash
    git tag v1.0.0
