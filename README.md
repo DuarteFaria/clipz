@@ -1,92 +1,87 @@
 # Clipz
 
-Clipz is a native macOS clipboard manager. It maintains a persistent history of text, images, and files you've copied, with a snappy gpui interface and minimal resource usage.
-
-## Features
-
-- **Native GUI** — built with Zed's gpui framework for speed and simplicity
-- **Persistent history** — clipboard entries saved to `~/.clipz_history.json`
-- **Image & file support** — automatically detects what you copy
-- **Low overhead** — adaptive polling with balanced/responsive/low-power modes
-- **JSON API** — integrate with scripts and other tools
-- **CLI mode** — quick access from the terminal
-
-## Quick Start
-
-### gpui frontend (macOS)
-```bash
-cargo run -p clipz-gpui
-```
-The frontend will launch the Zig backend in JSON API mode automatically.
-
-### CLI
-```bash
-zig build
-./zig-out/bin/clipz           # balanced (default)
-./zig-out/bin/clipz --low-power
-./zig-out/bin/clipz --responsive
-```
-
-### JSON API (for integrations)
-```bash
-./zig-out/bin/clipz --json-api
-```
+A native macOS clipboard manager. Keeps a persistent history of text, images, and files with a snappy GUI and minimal resource usage.
 
 ## Install
 
 ### Homebrew (recommended)
+
 ```bash
 brew tap DuarteFaria/clipz
 brew install --cask clipz
 ```
-This handles the Gatekeeper warning automatically — no extra steps needed.
 
 ### Download DMG
+
 Grab `Clipz.dmg` from the [latest release](https://github.com/DuarteFaria/clipz/releases/latest), open it, and drag Clipz to Applications.
 
-> First launch: if macOS blocks the app, run `xattr -cr /Applications/Clipz.app` or go to **System Settings > Privacy & Security** and click **Open Anyway**.
+> If macOS blocks the app on first launch, run `xattr -cr /Applications/Clipz.app` or go to **System Settings > Privacy & Security** and click **Open Anyway**.
 
-### Build from source
+## Usage
+
+Clipz lives in the menu bar. Click the clipboard icon or press **Cmd+Alt++** to toggle the popover.
+
+| Key           | Action                  |
+| ------------- | ----------------------- |
+| Arrow Up/Down | Navigate history        |
+| Enter         | Copy entry to clipboard |
+| Escape        | Close popover           |
+
+## Features
+
+- **Menu bar app** — lives in the status bar, no dock icon
+- **Persistent history** — saved to `~/.clipz_history.json`
+- **Image & file support** — detects content type automatically, shows inline previews
+- **Deduplication** — identical entries (including images by content) are collapsed
+- **Battery-efficient** — uses NSPasteboard change count to avoid polling when idle
+
+## Build from Source
+
+Requires [Zig](https://ziglang.org) and [Rust](https://rustup.rs).
+
 ```bash
-# Prerequisites: Zig, Rust, Homebrew (brew install sdl2 sdl2_ttf)
+zig build                     # build backend
+cargo run -p clipz-gpui       # run frontend (starts backend automatically)
+```
+
+The frontend expects the backend binary at `zig-out/bin/clipz`.
+
+### CLI mode
+
+```bash
+zig build run                          # balanced (default)
+zig build run -- --low-power           # slower polling, better for battery
+zig build run -- --responsive          # faster polling
+zig build run -- --json-api            # JSON API over stdin/stdout
+```
+
+### Packaging
+
+```bash
 ./scripts/build-app.sh
 open Clipz.dmg
 ```
 
-## Releasing a New Version
+## Releasing
 
-1. Commit your changes and tag:
+1. Tag and push:
    ```bash
    git tag -a v1.x.x -m "Description"
    git push --tags
    ```
-2. GitHub Actions builds `Clipz.dmg` and publishes it as a GitHub Release
-3. Update the `version` in [`homebrew-clipz/Casks/clipz.rb`](https://github.com/DuarteFaria/homebrew-clipz) to match the new tag
+2. GitHub Actions builds `Clipz.dmg` and publishes it as a release
+3. Update `version` in [`homebrew-clipz/Casks/clipz.rb`](https://github.com/DuarteFaria/homebrew-clipz)
 
 ## Project Structure
+
 ```
 clipz/
-├── src/            # Zig backend
-├── gpui-app/       # gpui frontend (Rust)
-├── build.zig
-└── README.md
+├── src/            # Zig backend (clipboard monitoring, persistence, JSON API)
+├── gpui-app/       # Rust frontend (gpui, menu bar, popover)
+├── scripts/        # Build/packaging scripts
+└── build.zig
 ```
-
-## Keyboard Shortcuts
-
-- **Arrow Up/Down** — navigate clipboard history
-- **Enter** — select and copy entry to clipboard
-- **Delete** — remove entry from history
-- **Cmd+K** — clear all history
-
-## Image & File Support
-
-The app detects and stores images and files from the clipboard. Image previews display inline in the history; file paths show as entries. Both are automatically deduplicated to avoid clutter.
-
-## Integration
-
-See `INTEGRATION.md` for JSON API examples, shell integration, and performance tuning.
 
 ## License
 
-See `LICENSE` for details.
+MIT — see [LICENSE](LICENSE).
