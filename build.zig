@@ -16,6 +16,8 @@ pub fn build(b: *std.Build) void {
         .root_module = exe_mod,
     });
 
+    exe.linkFramework("AppKit");
+
     b.installArtifact(exe);
 
     // ── Run step ──────────────────────────────────────────────────────────────
@@ -38,6 +40,8 @@ pub fn build(b: *std.Build) void {
     const unit_tests = b.addTest(.{
         .root_module = test_mod,
     });
+
+    unit_tests.linkFramework("AppKit");
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
 

@@ -868,7 +868,8 @@ impl AppState {
         }
     }
 
-    fn poll_backend(&mut self) {
+    fn poll_backend(&mut self) -> bool {
+        let mut entries_changed = false;
         if let Some(backend) = &self.backend {
             while let Ok(msg) = backend.rx.try_recv() {
                 match msg {
@@ -876,6 +877,7 @@ impl AppState {
                         if let Ok(mut shared) = self.shared_entries.lock() {
                             *shared = data;
                         }
+                        entries_changed = true;
                     }
                     BackendMessage::SelectSuccess { .. }
                     | BackendMessage::RemoveSuccess { .. }
@@ -889,6 +891,7 @@ impl AppState {
                 }
             }
         }
+        entries_changed
     }
 }
 
@@ -901,17 +904,22 @@ fn start_poll_loop(app_state: Entity<AppState>, cx: &mut App) {
                 bg_executor.timer(Duration::from_millis(100)).await;
                 let result = async_cx.update(|cx| {
                     app_state.update(cx, |state, cx| {
+                        let mut needs_notify = false;
+
                         // Handle hotkey
                         while state.hotkey_rx.try_recv().is_ok() {
                             state.toggle_popover(cx);
+                            needs_notify = true;
                         }
 
-                        // Poll backend
-                        state.poll_backend();
+                        if state.poll_backend() {
+                            needs_notify = true;
+                        }
 
                         // Menu bar click toggle
                         if MENU_BAR_CLICKED.swap(false, Ordering::SeqCst) {
                             state.toggle_popover(cx);
+                            needs_notify = true;
                         }
 
                         // Close popover if it lost focus
@@ -923,11 +931,12 @@ fn start_poll_loop(app_state: Entity<AppState>, cx: &mut App) {
                             }
                         }
 
-                        // Notify popover to re-render
-                        if let Some(handle) = state.popover_handle {
-                            let _ = handle.update(cx, |_, _, cx| {
-                                cx.notify();
-                            });
+                        if needs_notify {
+                            if let Some(handle) = state.popover_handle {
+                                let _ = handle.update(cx, |_, _, cx| {
+                                    cx.notify();
+                                });
+                            }
                         }
                     });
                 });

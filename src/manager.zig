@@ -4,6 +4,7 @@ const ui = @import("ui.zig");
 const persistence = @import("persistence.zig");
 const config = @import("config.zig");
 const image_storage = @import("image_storage.zig");
+const pasteboard = @import("pasteboard.zig");
 
 pub const ClipboardManagerError = error{
     InvalidIndex,
@@ -208,14 +209,25 @@ pub const ClipboardManager = struct {
 
     fn monitorThread(self: *ClipboardManager) !void {
         var consecutive_failures: u32 = 0;
-        var last_change_time: i64 = std.time.timestamp();
         var save_counter: u32 = 0;
+        var last_change_count: i64 = pasteboard.getChangeCount() orelse -1;
 
         while (self.should_monitor.load(.acquire)) {
+            const current_change_count = pasteboard.getChangeCount() orelse -1;
+            if (current_change_count == last_change_count and current_change_count != -1) {
+                std.Thread.sleep(self.config.min_poll_interval * std.time.ns_per_ms);
+                save_counter += 1;
+                if (save_counter >= self.config.force_save_cycles) {
+                    self.trySavePersistence();
+                    save_counter = 0;
+                }
+                continue;
+            }
+            last_change_count = current_change_count;
+
             const clipboard_content = clipboard.getContent(self.allocator) catch |err| switch (err) {
                 clipboard.ClipboardError.NoClipboardContent => {
                     consecutive_failures += 1;
-                    // Adaptive backoff: increase delay for consecutive failures
                     const delay_ms: u64 = @min(self.config.max_poll_interval, self.config.min_poll_interval + (consecutive_failures * 50));
                     std.Thread.sleep(delay_ms * std.time.ns_per_ms);
                     continue;
@@ -229,11 +241,8 @@ pub const ClipboardManager = struct {
                 else => return err,
             };
 
-            // Check if clipboard content has actually changed
-
             if (self.last_content) |last| {
                 if (std.mem.eql(u8, last, clipboard_content.content)) {
-                    // Same content string (works for text; also for images with stable paths)
                     self.allocator.free(clipboard_content.content);
                     consecutive_failures = 0;
                     std.Thread.sleep(self.config.min_poll_interval * std.time.ns_per_ms);
@@ -246,7 +255,6 @@ pub const ClipboardManager = struct {
                     image_storage.isTempImagePath(last))
                 {
                     if (image_storage.compareImageFiles(last, clipboard_content.content) catch false) {
-                        // Same image data, delete the new temp file and skip
                         image_storage.deleteImageFile(clipboard_content.content) catch {};
                         self.allocator.free(clipboard_content.content);
                         consecutive_failures = 0;
@@ -257,31 +265,8 @@ pub const ClipboardManager = struct {
             }
 
             try self.addEntry(clipboard_content);
-
-            consecutive_failures = 0; // Reset on success
-
-            // Adaptive sleep: longer delays when inactive (configurable)
-            const time_since_change = std.time.timestamp() - last_change_time;
-            last_change_time = std.time.timestamp();
-            const base_delay: u64 = if (time_since_change > self.config.inactive_threshold)
-                self.config.max_poll_interval
-            else
-                self.config.min_poll_interval;
-
-            // Split sleep for responsiveness and periodic saves
-            var sleep_count: u32 = 0;
-            const chunks = base_delay / 50;
-            while (sleep_count < chunks and self.should_monitor.load(.acquire)) {
-                std.Thread.sleep(50 * std.time.ns_per_ms);
-                sleep_count += 1;
-                save_counter += 1;
-
-                // Attempt periodic save (configurable frequency)
-                if (save_counter >= self.config.force_save_cycles) {
-                    self.trySavePersistence();
-                    save_counter = 0;
-                }
-            }
+            consecutive_failures = 0;
+            std.Thread.sleep(self.config.min_poll_interval * std.time.ns_per_ms);
         }
     }
 
