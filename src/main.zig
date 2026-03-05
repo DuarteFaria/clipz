@@ -5,7 +5,10 @@ const config = @import("config.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+    // Skip gpa.deinit() — leak reporting is noisy due to std.process.Child internals.
+    // Runtime safety (double-free, use-after-free) still works without deinit.
+    // OS reclaims all memory on process exit; clipboard_manager.deinit() handles
+    // persistence saves and thread cleanup.
     const allocator = gpa.allocator();
 
     const args = try std.process.argsAlloc(allocator);

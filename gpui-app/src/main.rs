@@ -763,21 +763,45 @@ impl Render for MenuBarPopover {
                     )
                     .child(
                         div()
-                            .id(SharedString::from("popover-clear"))
-                            .px_2()
-                            .py(px(2.0))
-                            .rounded_md()
-                            .text_size(px(10.0))
-                            .text_color(rgb(TEXT_MUTED))
-                            .hover(|style| style.bg(rgba(0xff453a20)).text_color(rgb(DANGER)))
-                            .cursor_pointer()
-                            .child("Clear All")
-                            .on_click(move |_, _, app| {
-                                view_clear.update(app, |this, cx| {
-                                    let _ = this.backend_tx.send("clear".into());
-                                    let _ = this.backend_tx.send("get-entries".into());
-                                    cx.notify();
-                                });
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .id(SharedString::from("popover-clear"))
+                                    .px_2()
+                                    .py(px(2.0))
+                                    .rounded_md()
+                                    .text_size(px(10.0))
+                                    .text_color(rgb(TEXT_MUTED))
+                                    .hover(|style| style.bg(rgba(0xff453a20)).text_color(rgb(DANGER)))
+                                    .cursor_pointer()
+                                    .child("Clear All")
+                                    .on_click(move |_, _, app| {
+                                        view_clear.update(app, |this, cx| {
+                                            let _ = this.backend_tx.send("clear".into());
+                                            let _ = this.backend_tx.send("get-entries".into());
+                                            cx.notify();
+                                        });
+                                    }),
+                            )
+                            .child({
+                                let quit_tx = self.backend_tx.clone();
+                                div()
+                                    .id(SharedString::from("popover-quit"))
+                                    .px_2()
+                                    .py(px(2.0))
+                                    .rounded_md()
+                                    .text_size(px(10.0))
+                                    .text_color(rgb(TEXT_MUTED))
+                                    .hover(|style| style.bg(rgba(0xff453a20)).text_color(rgb(DANGER)))
+                                    .cursor_pointer()
+                                    .child("Quit")
+                                    .on_click(move |_, _, _app| {
+                                        let _ = quit_tx.send("quit".into());
+                                        thread::sleep(Duration::from_millis(150));
+                                        std::process::exit(0);
+                                    })
                             }),
                     ),
             )
