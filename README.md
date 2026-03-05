@@ -34,16 +34,17 @@ zig build
 
 ## Install
 
-### Homebrew
+### Homebrew (recommended)
 ```bash
-brew tap DuarteFaria/clipz https://github.com/DuarteFaria/clipz
+brew tap DuarteFaria/clipz
 brew install --cask clipz
 ```
+This handles the Gatekeeper warning automatically — no extra steps needed.
 
 ### Download DMG
 Grab `Clipz.dmg` from the [latest release](https://github.com/DuarteFaria/clipz/releases/latest), open it, and drag Clipz to Applications.
 
-> First launch: right-click the app → Open (macOS Gatekeeper prompt for ad-hoc signed apps).
+> First launch: if macOS blocks the app, run `xattr -cr /Applications/Clipz.app` or go to **System Settings > Privacy & Security** and click **Open Anyway**.
 
 ### Build from source
 ```bash
@@ -54,14 +55,13 @@ open Clipz.dmg
 
 ## Releasing a New Version
 
-1. Update the version in `gpui-app/Info.plist` and `Casks/clipz.rb`
-2. Commit and tag:
+1. Commit your changes and tag:
    ```bash
-   git tag v1.0.0
+   git tag -a v1.x.x -m "Description"
    git push --tags
    ```
-3. GitHub Actions builds `Clipz.dmg` and publishes it as a GitHub Release
-4. Update the `sha256` in `HomebrewFormula/clipz.rb` with the hash from the release
+2. GitHub Actions builds `Clipz.dmg` and publishes it as a GitHub Release
+3. Update the `version` in [`homebrew-clipz/Casks/clipz.rb`](https://github.com/DuarteFaria/homebrew-clipz) to match the new tag
 
 ## Project Structure
 ```
