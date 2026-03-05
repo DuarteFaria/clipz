@@ -349,9 +349,9 @@ pub const ClipboardManager = struct {
 
         entry_to_remove.free(self.allocator);
 
-        // Mark as dirty for batched persistence
+        // Force-save immediately for user-initiated deletions
         self.dirty_flag.store(true, .release);
-        self.trySavePersistence();
+        self.forceSavePersistence();
 
         ui.printEntries(self);
     }
@@ -374,9 +374,9 @@ pub const ClipboardManager = struct {
         self.entries.clearRetainingCapacity();
         try self.entries.append(self.allocator, current_entry);
 
-        // Mark as dirty for batched persistence
+        // Force-save immediately for user-initiated clears
         self.dirty_flag.store(true, .release);
-        self.trySavePersistence();
+        self.forceSavePersistence();
 
         ui.printEntries(self);
     }

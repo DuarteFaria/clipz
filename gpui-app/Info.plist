@@ -20,6 +20,8 @@
     <string>AppIcon</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>LSUIElement</key>
+    <true/>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>NSAccessibilityUsageDescription</key>

@@ -7,6 +7,8 @@ target/
 
 # Built macOS app bundle
 Clipz.app/
+Clipz.dmg
+.dmg-staging/
 
 # Editor files
 .vscode/

@@ -32,6 +32,37 @@ zig build
 ./zig-out/bin/clipz --json-api
 ```
 
+## Install
+
+### Homebrew
+```bash
+brew tap DuarteFaria/clipz https://github.com/DuarteFaria/clipz
+brew install --cask clipz
+```
+
+### Download DMG
+Grab `Clipz.dmg` from the [latest release](https://github.com/DuarteFaria/clipz/releases/latest), open it, and drag Clipz to Applications.
+
+> First launch: right-click the app → Open (macOS Gatekeeper prompt for ad-hoc signed apps).
+
+### Build from source
+```bash
+# Prerequisites: Zig, Rust, Homebrew (brew install sdl2 sdl2_ttf)
+./scripts/build-app.sh
+open Clipz.dmg
+```
+
+## Releasing a New Version
+
+1. Update the version in `gpui-app/Info.plist` and `HomebrewFormula/clipz.rb`
+2. Commit and tag:
+   ```bash
+   git tag v1.0.0
+   git push --tags
+   ```
+3. GitHub Actions builds `Clipz.dmg` and publishes it as a GitHub Release
+4. Update the `sha256` in `HomebrewFormula/clipz.rb` with the hash from the release
+
 ## Project Structure
 ```
 clipz/

@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: macos-14
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Homebrew dependencies
+        run: brew install sdl2 sdl2_ttf
+
+      - name: Build Clipz.app and Clipz.dmg
+        run: ./scripts/build-app.sh
+
+      - name: Upload Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Clipz.dmg
+          generate_release_notes: true

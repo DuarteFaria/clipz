@@ -37,10 +37,30 @@ cp "$PROJECT/gpui-app/AppIcon.icns"      "$RESOURCES/AppIcon.icns"
 echo "▸ Ad-hoc code signing..."
 codesign --force --deep --sign - "$APP"
 
+# ── 5. Create DMG ────────────────────────────────────────────────────────────
+DMG="$PROJECT/$APP_NAME.dmg"
+echo "▸ Creating $APP_NAME.dmg..."
+
+DMG_STAGING="$PROJECT/.dmg-staging"
+rm -rf "$DMG_STAGING" "$DMG"
+mkdir -p "$DMG_STAGING"
+cp -r "$APP" "$DMG_STAGING/"
+ln -s /Applications "$DMG_STAGING/Applications"
+
+hdiutil create "$DMG" \
+  -volname "$APP_NAME" \
+  -srcfolder "$DMG_STAGING" \
+  -fs HFS+ \
+  -format UDZO \
+  -ov
+
+rm -rf "$DMG_STAGING"
+
 echo ""
 echo "✓ Built: $APP"
+echo "✓ Built: $DMG"
 echo ""
-echo "To install: cp -r \"$APP\" /Applications/"
+echo "To install: open \"$DMG\" and drag Clipz to Applications"
 echo "To run:     open \"$APP\""
 echo ""
 
