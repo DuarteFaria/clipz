@@ -56,7 +56,7 @@ pub const ClipboardManager = struct {
         const pers = try persistence.Persistence.init(allocator);
 
         var manager = ClipboardManager{
-            .entries = std.ArrayList(ClipboardEntry){},
+            .entries = .empty,
             .allocator = allocator,
             .max_entries = cfg.max_entries,
             .last_content = null,
