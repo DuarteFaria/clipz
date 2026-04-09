@@ -3,6 +3,7 @@ const std = @import("std");
 pub const Command = enum {
     get,
     get_index,
+    pin_index,
     exit,
     start,
     stop,
@@ -15,6 +16,7 @@ pub const Command = enum {
     pub fn fromString(str: []const u8) Command {
         if (std.mem.eql(u8, str, "get")) return .get;
         if (std.mem.startsWith(u8, str, "get ")) return .get_index;
+        if (std.mem.startsWith(u8, str, "pin ")) return .pin_index;
         if (std.mem.eql(u8, str, "exit")) return .exit;
         if (std.mem.eql(u8, str, "start")) return .start;
         if (std.mem.eql(u8, str, "stop")) return .stop;

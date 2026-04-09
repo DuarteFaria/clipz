@@ -14,6 +14,7 @@ pub const ClipboardEntry = struct {
     content: []const u8,
     timestamp: i64,
     entry_type: clipboard.ClipboardType,
+    pinned: bool = false,
 
     pub fn create(allocator: std.mem.Allocator, content: []const u8, entry_type: clipboard.ClipboardType) !ClipboardEntry {
         const content_copy = try allocator.dupe(u8, content);
@@ -21,6 +22,7 @@ pub const ClipboardEntry = struct {
             .content = content_copy,
             .timestamp = std.time.timestamp(),
             .entry_type = entry_type,
+            .pinned = false,
         };
     }
 
@@ -90,22 +92,19 @@ pub const ClipboardManager = struct {
         var loaded_entries = try self.persistence.loadEntries(self.allocator);
         defer loaded_entries.deinit(self.allocator);
 
-        const start_index = if (loaded_entries.items.len > self.max_entries)
-            loaded_entries.items.len - self.max_entries
-        else
-            0;
-
-        // Free content of entries we're skipping (before start_index)
-        for (loaded_entries.items[0..start_index]) |entry| {
-            self.allocator.free(entry.content);
+        while (loaded_entries.items.len > self.max_entries) {
+            const eviction_index = findOldestUnpinnedEntry(loaded_entries.items) orelse 0;
+            const removed = loaded_entries.orderedRemove(eviction_index);
+            self.allocator.free(removed.content);
         }
 
-        for (loaded_entries.items[start_index..]) |entry| {
+        for (loaded_entries.items) |entry| {
             const content_copy = try self.allocator.dupe(u8, entry.content);
             const new_entry = ClipboardEntry{
                 .content = content_copy,
                 .timestamp = entry.timestamp,
                 .entry_type = entry.entry_type,
+                .pinned = entry.pinned,
             };
             try self.entries.append(self.allocator, new_entry);
         }
@@ -150,7 +149,19 @@ pub const ClipboardManager = struct {
         self.allocator.free(clipboard_content.content);
 
         if (self.entries.items.len >= self.max_entries) {
-            const oldest = self.entries.orderedRemove(0);
+            const eviction_index = self.findOldestUnpinnedIndex() orelse {
+                // All entries are pinned, so we ignore the new clipboard item.
+                if (entry.entry_type == .image and image_storage.isTempImagePath(entry.content)) {
+                    image_storage.deleteImageFile(entry.content) catch {};
+                }
+                entry.free(self.allocator);
+                return;
+            };
+
+            const oldest = self.entries.orderedRemove(eviction_index);
+            if (oldest.entry_type == .image and image_storage.isTempImagePath(oldest.content)) {
+                image_storage.deleteImageFile(oldest.content) catch {};
+            }
             oldest.free(self.allocator);
         }
 
@@ -205,6 +216,59 @@ pub const ClipboardManager = struct {
 
     pub fn getEntries(self: *const ClipboardManager) []const ClipboardEntry {
         return self.entries.items;
+    }
+
+    pub fn getDisplayEntry(self: *const ClipboardManager, display_index: usize) ?ClipboardEntry {
+        const real_index = self.getRealIndexForDisplayPosition(display_index) orelse return null;
+        return self.entries.items[real_index];
+    }
+
+    pub fn getDisplayCount(self: *const ClipboardManager) usize {
+        return self.entries.items.len;
+    }
+
+    fn getRealIndexForDisplayPosition(self: *const ClipboardManager, display_index: usize) ?usize {
+        if (display_index >= self.entries.items.len) return null;
+        if (self.entries.items.len == 0) return null;
+
+        const current_index = self.entries.items.len - 1;
+        if (display_index == 0) return current_index;
+
+        var display_cursor: usize = 1;
+        var offset: usize = 1;
+        while (offset <= current_index) : (offset += 1) {
+            const real_index = current_index - offset;
+            const entry = self.entries.items[real_index];
+            if (entry.pinned) {
+                if (display_cursor == display_index) return real_index;
+                display_cursor += 1;
+            }
+        }
+
+        offset = 1;
+        while (offset <= current_index) : (offset += 1) {
+            const real_index = current_index - offset;
+            const entry = self.entries.items[real_index];
+            if (!entry.pinned) {
+                if (display_cursor == display_index) return real_index;
+                display_cursor += 1;
+            }
+        }
+
+        return null;
+    }
+
+    fn findOldestUnpinnedIndex(self: *const ClipboardManager) ?usize {
+        return findOldestUnpinnedEntry(self.entries.items);
+    }
+
+    fn findOldestUnpinnedEntry(entries: []const ClipboardEntry) ?usize {
+        for (entries, 0..) |entry, index| {
+            if (!entry.pinned) {
+                return index;
+            }
+        }
+        return null;
     }
 
     fn monitorThread(self: *ClipboardManager) !void {
@@ -299,7 +363,9 @@ pub const ClipboardManager = struct {
             return error.InvalidIndex;
         }
 
-        const real_index = self.entries.items.len - index;
+        const real_index = self.getRealIndexForDisplayPosition(index - 1) orelse {
+            return error.InvalidIndex;
+        };
         const entry = self.entries.items[real_index];
 
         try clipboard.setContentWithType(self.allocator, entry.content, entry.entry_type);
@@ -324,7 +390,9 @@ pub const ClipboardManager = struct {
             return error.InvalidIndex;
         }
 
-        const real_index = self.entries.items.len - index;
+        const real_index = self.getRealIndexForDisplayPosition(index - 1) orelse {
+            return error.InvalidIndex;
+        };
         const entry_to_remove = self.entries.orderedRemove(real_index);
 
         // Clean up image file if it's a temp image path
@@ -341,12 +409,42 @@ pub const ClipboardManager = struct {
         ui.printEntries(self);
     }
 
-    pub fn clearHistory(self: *ClipboardManager) !void {
-        // Keep only the most recent entry (current clipboard)
-        if (self.entries.items.len <= 1) return; // Nothing to clear
+    pub fn togglePinned(self: *ClipboardManager, index: usize) !bool {
+        if (index == 0 or index > self.entries.items.len) {
+            return error.InvalidIndex;
+        }
 
-        // Free all entries except the last one (most recent)
-        for (self.entries.items[0 .. self.entries.items.len - 1]) |entry| {
+        const real_index = self.getRealIndexForDisplayPosition(index - 1) orelse {
+            return error.InvalidIndex;
+        };
+        self.entries.items[real_index].pinned = !self.entries.items[real_index].pinned;
+
+        self.dirty_flag.store(true, .release);
+        self.forceSavePersistence();
+
+        return self.entries.items[real_index].pinned;
+    }
+
+    pub fn clearHistory(self: *ClipboardManager) !void {
+        // Keep the current clipboard entry and any pinned entries.
+        if (self.entries.items.len == 0) return;
+
+        const current_index = self.entries.items.len - 1;
+        var write_index: usize = 0;
+        var removed_any = false;
+
+        for (self.entries.items, 0..) |entry, read_index| {
+            const should_keep = read_index == current_index or entry.pinned;
+            if (should_keep) {
+                if (write_index != read_index) {
+                    self.entries.items[write_index] = entry;
+                }
+                write_index += 1;
+                continue;
+            }
+
+            removed_any = true;
+
             // Clean up image file if it's a temp image path
             if (entry.entry_type == .image and image_storage.isTempImagePath(entry.content)) {
                 image_storage.deleteImageFile(entry.content) catch {};
@@ -354,10 +452,9 @@ pub const ClipboardManager = struct {
             entry.free(self.allocator);
         }
 
-        // Keep only the last entry
-        const current_entry = self.entries.items[self.entries.items.len - 1];
-        self.entries.clearRetainingCapacity();
-        try self.entries.append(self.allocator, current_entry);
+        if (!removed_any) return;
+
+        self.entries.items.len = write_index;
 
         // Force-save immediately for user-initiated clears
         self.dirty_flag.store(true, .release);

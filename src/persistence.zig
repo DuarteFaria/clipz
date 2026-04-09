@@ -28,7 +28,7 @@ pub const Persistence = struct {
         var writer = json.writer(arena_allocator);
 
         try writer.writeAll("{\n");
-        try writer.print("  \"version\": 2,\n", .{});
+        try writer.print("  \"version\": 3,\n", .{});
         try writer.print("  \"entries\": [\n", .{});
 
         for (entries, 0..) |entry, i| {
@@ -47,7 +47,8 @@ pub const Persistence = struct {
             }
             try writer.writeAll("\",\n");
             try writer.print("      \"timestamp\": {d},\n", .{entry.timestamp});
-            try writer.print("      \"type\": \"{s}\"\n", .{@tagName(entry.entry_type)});
+            try writer.print("      \"type\": \"{s}\",\n", .{@tagName(entry.entry_type)});
+            try writer.print("      \"pinned\": {s}\n", .{if (entry.pinned) "true" else "false"});
 
             if (i < entries.len - 1) {
                 try writer.writeAll("    },\n");
@@ -122,11 +123,21 @@ pub const Persistence = struct {
                 }
             }
 
+            var pinned = false;
+            if (version >= 3) {
+                if (item.object.get("pinned")) |pinned_field| {
+                    if (pinned_field == .bool) {
+                        pinned = pinned_field.bool;
+                    }
+                }
+            }
+
             const content_copy = try allocator.dupe(u8, content_str);
             const entry = manager.ClipboardEntry{
                 .content = content_copy,
                 .timestamp = timestamp,
                 .entry_type = entry_type,
+                .pinned = pinned,
             };
             try entries.append(allocator, entry);
         }

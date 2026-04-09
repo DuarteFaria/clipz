@@ -56,6 +56,8 @@ enum BackendMessage {
     SelectSuccess { index: usize },
     #[serde(rename = "remove-success")]
     RemoveSuccess { index: usize },
+    #[serde(rename = "pin-toggled")]
+    PinToggled { index: usize, pinned: bool },
     #[serde(rename = "success")]
     Success { message: String },
     #[serde(rename = "ready")]
@@ -75,6 +77,8 @@ struct Entry {
     #[serde(default)]
     #[serde(rename = "isCurrent")]
     is_current: bool,
+    #[serde(default)]
+    pinned: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -286,19 +290,23 @@ fn type_label_for_type(et: &EntryType) -> &'static str {
     }
 }
 
-const BG_SURFACE: u32 = 0x1a1a1a;
-const BG_HOVER: u32 = 0x222222;
-const BG_ACTIVE: u32 = 0x1c2a3a;
-const BORDER_SUBTLE: u32 = 0x2a2a2a;
-const TEXT_PRIMARY: u32 = 0xf0f0f0;
-const TEXT_SECONDARY: u32 = 0x999999;
-const TEXT_MUTED: u32 = 0x555555;
+const TEXT_PRIMARY: u32 = 0xf7f4ee;
+const TEXT_SECONDARY: u32 = 0xd7d0c2;
+const TEXT_MUTED: u32 = 0xa69c89;
+const TEXT_DIM: u32 = 0x8a7f6b;
 const ACCENT_BLUE: u32 = 0x5ac8fa;
 const ACCENT_ORANGE: u32 = 0xff9f0a;
 const ACCENT_GREEN: u32 = 0x30d158;
 const ACCENT_PURPLE: u32 = 0xbf5af2;
 const ACCENT_PINK: u32 = 0xff375f;
 const DANGER: u32 = 0xff453a;
+const SURFACE_BASE: u32 = 0x14110bf2;
+const SURFACE_BORDER: u32 = 0xffffff24;
+const SURFACE_ROW: u32 = 0xffffff08;
+const SURFACE_ROW_FOCUSED: u32 = 0xffffff14;
+const SURFACE_ROW_CURRENT: u32 = 0xffffff20;
+const SURFACE_ROW_HOVER: u32 = 0xffffff18;
+const SURFACE_ICON_WELL: u32 = 0xffffff10;
 
 // ---------- NSStatusItem setup (macOS) ----------
 
@@ -447,6 +455,10 @@ impl MenuBarPopover {
         let _ = self.backend_tx.send("get-entries".into());
     }
 
+    fn toggle_pin(&self, id: usize) {
+        let _ = self.backend_tx.send(format!("toggle-pin:{id}"));
+    }
+
     fn render_popover_entry(
         entry: &Entry,
         idx: usize,
@@ -458,6 +470,7 @@ impl MenuBarPopover {
         let content = entry.content.clone();
         let entry_type = entry.entry_type.clone();
         let is_current = entry.is_current;
+        let is_pinned = entry.pinned;
         let image_path = entry.content.clone();
         let path_exists = std::path::Path::new(&image_path).exists();
         let timestamp_str = format_timestamp(entry.timestamp);
@@ -476,48 +489,45 @@ impl MenuBarPopover {
         };
 
         let row_bg = if is_current {
-            rgb(BG_ACTIVE)
+            rgba(SURFACE_ROW_CURRENT)
         } else if is_focused {
-            rgb(0x2a4a5a)
+            rgba(SURFACE_ROW_FOCUSED)
         } else {
-            rgba(0x00000000)
+            rgba(SURFACE_ROW)
         };
 
         let view = view_entity.clone();
         let view_remove = view_entity.clone();
+        let view_pin = view_entity.clone();
         let entry_id_str = SharedString::from(format!("pop-entry-{}", id));
 
         div()
             .id(entry_id_str)
-            .mx_1()
-            .mb(px(2.0))
+            .mx(px(6.0))
+            .mb(px(1.0))
             .flex()
             .items_center()
-            .gap_2()
-            .px_2()
-            .py(px(6.0))
+            .gap(px(8.0))
+            .px(px(8.0))
+            .py(px(7.0))
             .bg(row_bg)
-            .rounded_md()
-            .hover(|style| style.bg(rgb(BG_HOVER)))
+            .rounded_lg()
+            .hover(|style| style.bg(rgba(SURFACE_ROW_HOVER)))
             .cursor_pointer()
-            .when(is_current, |el| {
-                el.border_l_2().border_color(rgb(ACCENT_BLUE))
-            })
             .child(if entry_type == EntryType::Image && path_exists {
                 let img_path = std::path::Path::new(&image_path);
                 div()
                     .size(px(28.0))
-                    .rounded_md()
+                    .rounded(px(6.0))
                     .overflow_hidden()
                     .flex_shrink_0()
-                    .bg(rgb(BG_SURFACE))
                     .child(img(img_path).size(px(28.0)))
             } else if entry_type == EntryType::Color {
                 let swatch_color = parse_hex_color(&content).unwrap_or(ACCENT_PINK);
                 div()
                     .size(px(28.0))
-                    .rounded_md()
-                    .bg(rgb(BG_SURFACE))
+                    .rounded(px(6.0))
+                    .bg(rgba(SURFACE_ICON_WELL))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -525,7 +535,7 @@ impl MenuBarPopover {
                     .child(
                         div()
                             .size(px(16.0))
-                            .rounded_md()
+                            .rounded(px(4.0))
                             .bg(rgb(swatch_color))
                             .border_1()
                             .border_color(rgba(0xffffff30)),
@@ -533,8 +543,8 @@ impl MenuBarPopover {
             } else {
                 div()
                     .size(px(28.0))
-                    .rounded_md()
-                    .bg(rgb(BG_SURFACE))
+                    .rounded(px(6.0))
+                    .bg(rgba(SURFACE_ICON_WELL))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -566,26 +576,66 @@ impl MenuBarPopover {
                                     .text_size(px(10.0))
                                     .child(tl),
                             )
+                            .when(is_pinned, |el| {
+                                el.child(
+                                    div()
+                                        .text_size(px(10.0))
+                                        .text_color(rgb(TEXT_DIM))
+                                        .child("\u{00b7}"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(10.0))
+                                        .text_color(rgb(ACCENT_ORANGE))
+                                        .child("Pinned"),
+                                )
+                            })
                             .child(
                                 div()
                                     .text_size(px(10.0))
-                                    .text_color(rgb(TEXT_MUTED))
+                                    .text_color(rgb(TEXT_DIM))
                                     .child("\u{00b7}"),
                             )
                             .child(
                                 div()
                                     .text_size(px(10.0))
-                                    .text_color(rgb(TEXT_MUTED))
+                                    .text_color(rgb(TEXT_SECONDARY))
                                     .child(timestamp_str),
                             ),
                     ),
+            )
+            .child(
+                div()
+                    .id(SharedString::from(format!("pop-pin-{}", id)))
+                    .size(px(22.0))
+                    .rounded(px(6.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .flex_shrink_0()
+                    .text_size(px(9.0))
+                    .text_color(if is_pinned {
+                        rgb(ACCENT_ORANGE)
+                    } else {
+                        rgb(TEXT_MUTED)
+                    })
+                    .hover(|style| style.bg(rgba(0xff9f0a18)).text_color(rgb(ACCENT_ORANGE)))
+                    .cursor_pointer()
+                    .child(if is_pinned { "\u{25CF}" } else { "\u{25CB}" })
+                    .on_click(move |_, _, app| {
+                        app.stop_propagation();
+                        view_pin.update(app, |this, cx| {
+                            this.toggle_pin(id);
+                            cx.notify();
+                        });
+                    }),
             )
             .when(id != CURRENT_ENTRY_ID, |el| {
                 el.child(
                     div()
                         .id(SharedString::from(format!("pop-remove-{}", id)))
-                        .size(px(20.0))
-                        .rounded_md()
+                        .size(px(22.0))
+                        .rounded(px(6.0))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -654,7 +704,11 @@ impl Render for MenuBarPopover {
             .flex()
             .flex_col()
             .size_full()
-            .bg(rgba(0x1a1a1acc))
+            .bg(rgba(SURFACE_BASE))
+            .border_1()
+            .border_color(rgba(SURFACE_BORDER))
+            .rounded_xl()
+            .overflow_hidden()
             .text_color(rgb(TEXT_PRIMARY))
             .on_key_down(move |evt, _, app| {
                 view_keyboard.update(app, |this, cx| {
@@ -702,35 +756,6 @@ impl Render for MenuBarPopover {
                     }
                 });
             })
-            // Header
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .px_3()
-                    .py_2()
-                    .border_b_1()
-                    .border_color(rgb(BORDER_SUBTLE))
-                    .flex_shrink_0()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .text_color(rgb(TEXT_PRIMARY))
-                            .child("Clipz"),
-                    )
-                    .child(
-                        div()
-                            .px_2()
-                            .py(px(1.0))
-                            .rounded_md()
-                            .bg(rgb(BORDER_SUBTLE))
-                            .text_size(px(10.0))
-                            .text_color(rgb(TEXT_SECONDARY))
-                            .child(format!("{}", entry_count)),
-                    ),
-            )
             // Entry list
             .child(
                 div()
@@ -741,7 +766,8 @@ impl Render for MenuBarPopover {
                     .min_h_0()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll_handle)
-                    .py_1()
+                    .pt(px(6.0))
+                    .pb(px(2.0))
                     .children(rendered_entries),
             )
             // Footer
@@ -753,12 +779,12 @@ impl Render for MenuBarPopover {
                     .px_3()
                     .py(px(6.0))
                     .border_t_1()
-                    .border_color(rgb(BORDER_SUBTLE))
+                    .border_color(rgba(SURFACE_BORDER))
                     .flex_shrink_0()
                     .child(
                         div()
                             .text_size(px(10.0))
-                            .text_color(rgb(TEXT_MUTED))
+                            .text_color(rgb(TEXT_SECONDARY))
                             .child(format!("{} items", entry_count)),
                     )
                     .child(
@@ -771,10 +797,10 @@ impl Render for MenuBarPopover {
                                     .id(SharedString::from("popover-clear"))
                                     .px_2()
                                     .py(px(2.0))
-                                    .rounded_md()
+                                    .rounded(px(6.0))
                                     .text_size(px(10.0))
-                                    .text_color(rgb(TEXT_MUTED))
-                                    .hover(|style| style.bg(rgba(0xff453a20)).text_color(rgb(DANGER)))
+                                    .text_color(rgb(TEXT_SECONDARY))
+                                    .hover(|style| style.bg(rgba(0xff453a18)).text_color(rgb(DANGER)))
                                     .cursor_pointer()
                                     .child("Clear All")
                                     .on_click(move |_, _, app| {
@@ -791,10 +817,10 @@ impl Render for MenuBarPopover {
                                     .id(SharedString::from("popover-quit"))
                                     .px_2()
                                     .py(px(2.0))
-                                    .rounded_md()
+                                    .rounded(px(6.0))
                                     .text_size(px(10.0))
-                                    .text_color(rgb(TEXT_MUTED))
-                                    .hover(|style| style.bg(rgba(0xff453a20)).text_color(rgb(DANGER)))
+                                    .text_color(rgb(TEXT_SECONDARY))
+                                    .hover(|style| style.bg(rgba(0xff453a18)).text_color(rgb(DANGER)))
                                     .cursor_pointer()
                                     .child("Quit")
                                     .on_click(move |_, _, _app| {
@@ -881,6 +907,7 @@ impl AppState {
                     }
                     BackendMessage::SelectSuccess { .. }
                     | BackendMessage::RemoveSuccess { .. }
+                    | BackendMessage::PinToggled { .. }
                     | BackendMessage::Success { .. }
                     | BackendMessage::Ready => {
                         if let Err(e) = backend.send("get-entries") {
@@ -954,6 +981,14 @@ fn set_activation_policy_accessory() {
         let ns_app: id = msg_send![class!(NSApplication), sharedApplication];
         // NSApplicationActivationPolicyAccessory = 1
         let _: () = msg_send![ns_app, setActivationPolicy: 1i64];
+
+        // Force dark vibrant appearance so the blur material is always dark,
+        // regardless of wallpaper or system theme.
+        let name = NSString::alloc(nil).init_str("NSAppearanceNameVibrantDark");
+        let appearance: id = msg_send![class!(NSAppearance), appearanceNamed: name];
+        if !appearance.is_null() {
+            let _: () = msg_send![ns_app, setAppearance: appearance];
+        }
     }
 }
 

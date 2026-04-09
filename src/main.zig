@@ -100,6 +100,7 @@ fn printUsage() void {
         \\CLI Controls:
         \\  get           Display clipboard entries
         \\  get <n>       Copy entry n to clipboard
+        \\  pin <n>       Toggle pin on entry n
         \\  clean         Clear all entries
         \\  exit          Quit application
         \\
@@ -188,6 +189,24 @@ fn runJsonApi(allocator: std.mem.Allocator, clipboard_manager: *manager.Clipboar
                     defer clipboard_manager.stdout_mutex.unlock();
                     try stdout.writeAll("{\"type\":\"error\",\"message\":\"Invalid index\"}\n");
                 }
+            } else if (std.mem.startsWith(u8, trimmed, "toggle-pin:")) {
+                const index_str = trimmed["toggle-pin:".len..];
+                if (std.fmt.parseInt(usize, index_str, 10)) |index| {
+                    const pinned = clipboard_manager.togglePinned(index) catch {
+                        clipboard_manager.stdout_mutex.lock();
+                        defer clipboard_manager.stdout_mutex.unlock();
+                        try stdout.writeAll("{\"type\":\"error\",\"message\":\"Invalid index\"}\n");
+                        continue;
+                    };
+                    clipboard_manager.stdout_mutex.lock();
+                    defer clipboard_manager.stdout_mutex.unlock();
+                    try sendPinResult(allocator, stdout, index, pinned);
+                    try sendClipboardEntries(allocator, stdout, clipboard_manager);
+                } else |_| {
+                    clipboard_manager.stdout_mutex.lock();
+                    defer clipboard_manager.stdout_mutex.unlock();
+                    try stdout.writeAll("{\"type\":\"error\",\"message\":\"Invalid index\"}\n");
+                }
             } else if (std.mem.eql(u8, trimmed, "clear")) {
                 clipboard_manager.clearHistory() catch {
                     clipboard_manager.stdout_mutex.lock();
@@ -210,81 +229,41 @@ fn runJsonApi(allocator: std.mem.Allocator, clipboard_manager: *manager.Clipboar
 }
 
 fn sendClipboardEntries(allocator: std.mem.Allocator, stdout: std.fs.File, clipboard_manager: *manager.ClipboardManager) !void {
-    const entries = clipboard_manager.getEntries();
+    const entry_count = clipboard_manager.getDisplayCount();
 
     try stdout.writeAll("{\"type\":\"entries\",\"data\":[");
 
-    if (entries.len > 0) {
-        // First, send the most recent entry (current clipboard) with id=1
-        const most_recent = entries[entries.len - 1];
+    for (0..entry_count) |i| {
+        const entry = clipboard_manager.getDisplayEntry(i) orelse continue;
+        if (i > 0) {
+            try stdout.writeAll(",");
+        }
 
-        // Escape JSON string for most recent
-        var escaped_content_recent = std.ArrayList(u8){};
-        defer escaped_content_recent.deinit(allocator);
+        var escaped_content = std.ArrayList(u8){};
+        defer escaped_content.deinit(allocator);
 
-        for (most_recent.content) |char| {
+        for (entry.content) |char| {
             switch (char) {
-                '"' => try escaped_content_recent.appendSlice(allocator, "\\\""),
-                '\\' => try escaped_content_recent.appendSlice(allocator, "\\\\"),
-                '\n' => try escaped_content_recent.appendSlice(allocator, "\\n"),
-                '\r' => try escaped_content_recent.appendSlice(allocator, "\\r"),
-                '\t' => try escaped_content_recent.appendSlice(allocator, "\\t"),
-                else => try escaped_content_recent.append(allocator, char),
+                '"' => try escaped_content.appendSlice(allocator, "\\\""),
+                '\\' => try escaped_content.appendSlice(allocator, "\\\\"),
+                '\n' => try escaped_content.appendSlice(allocator, "\\n"),
+                '\r' => try escaped_content.appendSlice(allocator, "\\r"),
+                '\t' => try escaped_content.appendSlice(allocator, "\\t"),
+                else => try escaped_content.append(allocator, char),
             }
         }
 
-        const entry_type_str = switch (most_recent.entry_type) {
+        const entry_type_str = switch (entry.entry_type) {
             .text => "text",
             .image => "image",
             .file => "file",
             .url => "url",
             .color => "color",
         };
-        const recent_json = try std.fmt.allocPrint(allocator, "{{\"id\":1,\"content\":\"{s}\",\"timestamp\":{d},\"type\":\"{s}\",\"isCurrent\":true}}", .{ escaped_content_recent.items, most_recent.timestamp * 1000, entry_type_str });
-        defer allocator.free(recent_json);
-        try stdout.writeAll(recent_json);
+        const json_entry = try std.fmt.allocPrint(allocator, "{{\"id\":{d},\"content\":\"{s}\",\"timestamp\":{d},\"type\":\"{s}\",\"isCurrent\":{s},\"pinned\":{s}}}", .{ i + 1, escaped_content.items, entry.timestamp * 1000, entry_type_str, if (i == 0) "true" else "false", if (entry.pinned) "true" else "false" });
+        defer allocator.free(json_entry);
 
-        // Then send the rest from newest to oldest (if there are more than 1 entry)
-        if (entries.len > 1) {
-            var entry_id: usize = 2;
-            var i: usize = entries.len - 2; // Start from second most recent
-            while (true) {
-                try stdout.writeAll(",");
-
-                const entry = entries[i];
-
-                // Escape JSON string
-                var escaped_content = std.ArrayList(u8){};
-                defer escaped_content.deinit(allocator);
-
-                for (entry.content) |char| {
-                    switch (char) {
-                        '"' => try escaped_content.appendSlice(allocator, "\\\""),
-                        '\\' => try escaped_content.appendSlice(allocator, "\\\\"),
-                        '\n' => try escaped_content.appendSlice(allocator, "\\n"),
-                        '\r' => try escaped_content.appendSlice(allocator, "\\r"),
-                        '\t' => try escaped_content.appendSlice(allocator, "\\t"),
-                        else => try escaped_content.append(allocator, char),
-                    }
-                }
-
-                const entry_type_str_history = switch (entry.entry_type) {
-                    .text => "text",
-                    .image => "image",
-                    .file => "file",
-                    .url => "url",
-                    .color => "color",
-                };
-                const json_entry = try std.fmt.allocPrint(allocator, "{{\"id\":{d},\"content\":\"{s}\",\"timestamp\":{d},\"type\":\"{s}\",\"isCurrent\":false}}", .{ entry_id, escaped_content.items, entry.timestamp * 1000, entry_type_str_history });
-                defer allocator.free(json_entry);
-
-                try stdout.writeAll(json_entry);
-                entry_id += 1;
-
-                if (i == 0) break;
-                i -= 1;
-            }
-        }
+        try stdout.writeAll(json_entry);
     }
 
     try stdout.writeAll("]}\n");
@@ -308,4 +287,10 @@ fn sendRemoveResult(allocator: std.mem.Allocator, stdout: std.fs.File, index: us
     } else {
         try stdout.writeAll("{\"type\":\"error\",\"message\":\"Failed to remove entry\"}\n");
     }
+}
+
+fn sendPinResult(allocator: std.mem.Allocator, stdout: std.fs.File, index: usize, pinned: bool) !void {
+    const response = try std.fmt.allocPrint(allocator, "{{\"type\":\"pin-toggled\",\"index\":{d},\"pinned\":{s}}}\n", .{ index, if (pinned) "true" else "false" });
+    defer allocator.free(response);
+    try stdout.writeAll(response);
 }

@@ -15,6 +15,7 @@ pub const ClipboardUI = struct {
         std.debug.print("Commands:\n", .{});
         std.debug.print("  get           - Show all clipboard entries\n", .{});
         std.debug.print("  get <n>       - Show specific clipboard entry\n", .{});
+        std.debug.print("  pin <n>       - Toggle pin on a clipboard entry\n", .{});
         std.debug.print("  start         - Start monitoring clipboard in background\n", .{});
         std.debug.print("  stop          - Stop monitoring clipboard\n", .{});
         std.debug.print("  clean         - Clean the clipboard\n", .{});
@@ -71,6 +72,17 @@ pub const ClipboardUI = struct {
                         try self.clipboard.selectEntry(index);
                         continue;
                     },
+                    .pin_index => {
+                        const index_str = trimmed["pin ".len..];
+                        const index = std.fmt.parseInt(usize, index_str, 10) catch {
+                            std.debug.print("Invalid index. Usage: pin <number>\n", .{});
+                            continue;
+                        };
+
+                        _ = try self.clipboard.togglePinned(index);
+                        printEntries(self.clipboard);
+                        continue;
+                    },
                     .help => {
                         printHelp();
                     },
@@ -85,20 +97,21 @@ pub const ClipboardUI = struct {
 };
 
 pub fn printEntries(clipboard_entries: *manager.ClipboardManager) void {
-    const entries = clipboard_entries.getEntries();
+    const entry_count = clipboard_entries.getDisplayCount();
 
     std.debug.print("\x1b[2J\x1b[H", .{});
 
-    std.debug.print("\nClipboard History ({d} entries):\n", .{entries.len});
+    std.debug.print("\nClipboard History ({d} entries):\n", .{entry_count});
     std.debug.print("----------------------------------------\n", .{});
 
-    for (entries, 0..) |entry, i| {
-        const reversed_index = entries.len - 1 - i;
+    for (0..entry_count) |i| {
+        const entry = clipboard_entries.getDisplayEntry(i) orelse continue;
         const timestamp = entry.timestamp;
         const now = std.time.timestamp();
         const age_secs = now - timestamp;
+        const pin_label = if (entry.pinned) " [PINNED]" else "";
 
-        std.debug.print("\nClip {d} (from {d}s ago):\n", .{ reversed_index + 1, age_secs });
+        std.debug.print("\nClip {d}{s} (from {d}s ago):\n", .{ i + 1, pin_label, age_secs });
         std.debug.print("{s}\n", .{entry.content});
     }
     std.debug.print("----------------------------------------\n", .{});
