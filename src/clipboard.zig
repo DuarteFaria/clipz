@@ -336,10 +336,6 @@ fn validateFilePath(path: []const u8) bool {
     return true;
 }
 
-pub fn setContent(allocator: std.mem.Allocator, content: []const u8) !void {
-    return setContentWithType(allocator, content, .text);
-}
-
 pub fn setContentWithType(allocator: std.mem.Allocator, content: []const u8, entry_type: ClipboardType) !void {
     switch (builtin.os.tag) {
         .macos => {

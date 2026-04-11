@@ -122,6 +122,8 @@ fn sendEntriesCallback(manager_ptr: *manager.ClipboardManager) void {
 
 // NEW: JSON API mode for Electron communication
 fn runJsonApi(allocator: std.mem.Allocator, clipboard_manager: *manager.ClipboardManager) !void {
+    clipboard_manager.entries_changed_callback = sendEntriesCallback;
+
     // Start clipboard monitoring in background
     try clipboard_manager.startMonitoring();
     defer clipboard_manager.stopMonitoring();
@@ -129,10 +131,8 @@ fn runJsonApi(allocator: std.mem.Allocator, clipboard_manager: *manager.Clipboar
     const stdin = std.fs.File.stdin();
     const stdout = std.fs.File.stdout();
 
-    clipboard_manager.entries_changed_callback = sendEntriesCallback;
-
-    // Send ready signal
-    try stdout.writeAll("{\"type\":\"ready\"}\n");
+    // Send ready signal with capability flags for frontend compatibility
+    try stdout.writeAll("{\"type\":\"ready\",\"supportsIdCommands\":true}\n");
 
     var buffer: [1024]u8 = undefined;
     while (true) {
@@ -151,6 +151,24 @@ fn runJsonApi(allocator: std.mem.Allocator, clipboard_manager: *manager.Clipboar
                 clipboard_manager.stdout_mutex.lock();
                 defer clipboard_manager.stdout_mutex.unlock();
                 try sendClipboardEntries(allocator, stdout, clipboard_manager);
+            } else if (std.mem.startsWith(u8, trimmed, "select-entry-id:")) {
+                const id_str = trimmed["select-entry-id:".len..];
+                if (std.fmt.parseInt(u64, id_str, 10)) |entry_id| {
+                    clipboard_manager.selectEntryById(entry_id) catch {
+                        clipboard_manager.stdout_mutex.lock();
+                        defer clipboard_manager.stdout_mutex.unlock();
+                        try stdout.writeAll("{\"type\":\"error\",\"message\":\"Invalid id\"}\n");
+                        continue;
+                    };
+                    clipboard_manager.stdout_mutex.lock();
+                    defer clipboard_manager.stdout_mutex.unlock();
+                    try sendSelectResultById(allocator, stdout, entry_id);
+                    try sendClipboardEntries(allocator, stdout, clipboard_manager);
+                } else |_| {
+                    clipboard_manager.stdout_mutex.lock();
+                    defer clipboard_manager.stdout_mutex.unlock();
+                    try stdout.writeAll("{\"type\":\"error\",\"message\":\"Invalid id\"}\n");
+                }
             } else if (std.mem.startsWith(u8, trimmed, "select-entry:")) {
                 const index_str = trimmed["select-entry:".len..];
                 if (std.fmt.parseInt(usize, index_str, 10)) |index| {
@@ -162,13 +180,30 @@ fn runJsonApi(allocator: std.mem.Allocator, clipboard_manager: *manager.Clipboar
                     };
                     clipboard_manager.stdout_mutex.lock();
                     defer clipboard_manager.stdout_mutex.unlock();
-                    try sendSelectResult(allocator, stdout, index, true);
-                    // Send updated entries to frontend
+                    try sendSelectResultByIndex(allocator, stdout, index);
                     try sendClipboardEntries(allocator, stdout, clipboard_manager);
                 } else |_| {
                     clipboard_manager.stdout_mutex.lock();
                     defer clipboard_manager.stdout_mutex.unlock();
                     try stdout.writeAll("{\"type\":\"error\",\"message\":\"Invalid index\"}\n");
+                }
+            } else if (std.mem.startsWith(u8, trimmed, "remove-entry-id:")) {
+                const id_str = trimmed["remove-entry-id:".len..];
+                if (std.fmt.parseInt(u64, id_str, 10)) |entry_id| {
+                    clipboard_manager.removeEntryById(entry_id) catch {
+                        clipboard_manager.stdout_mutex.lock();
+                        defer clipboard_manager.stdout_mutex.unlock();
+                        try stdout.writeAll("{\"type\":\"error\",\"message\":\"Invalid id\"}\n");
+                        continue;
+                    };
+                    clipboard_manager.stdout_mutex.lock();
+                    defer clipboard_manager.stdout_mutex.unlock();
+                    try sendRemoveResultById(allocator, stdout, entry_id);
+                    try sendClipboardEntries(allocator, stdout, clipboard_manager);
+                } else |_| {
+                    clipboard_manager.stdout_mutex.lock();
+                    defer clipboard_manager.stdout_mutex.unlock();
+                    try stdout.writeAll("{\"type\":\"error\",\"message\":\"Invalid id\"}\n");
                 }
             } else if (std.mem.startsWith(u8, trimmed, "remove-entry:")) {
                 const index_str = trimmed["remove-entry:".len..];
@@ -181,13 +216,30 @@ fn runJsonApi(allocator: std.mem.Allocator, clipboard_manager: *manager.Clipboar
                     };
                     clipboard_manager.stdout_mutex.lock();
                     defer clipboard_manager.stdout_mutex.unlock();
-                    try sendRemoveResult(allocator, stdout, index, true);
-                    // Send updated entries to frontend
+                    try sendRemoveResultByIndex(allocator, stdout, index);
                     try sendClipboardEntries(allocator, stdout, clipboard_manager);
                 } else |_| {
                     clipboard_manager.stdout_mutex.lock();
                     defer clipboard_manager.stdout_mutex.unlock();
                     try stdout.writeAll("{\"type\":\"error\",\"message\":\"Invalid index\"}\n");
+                }
+            } else if (std.mem.startsWith(u8, trimmed, "toggle-pin-id:")) {
+                const id_str = trimmed["toggle-pin-id:".len..];
+                if (std.fmt.parseInt(u64, id_str, 10)) |entry_id| {
+                    const pinned = clipboard_manager.togglePinnedById(entry_id) catch {
+                        clipboard_manager.stdout_mutex.lock();
+                        defer clipboard_manager.stdout_mutex.unlock();
+                        try stdout.writeAll("{\"type\":\"error\",\"message\":\"Invalid id\"}\n");
+                        continue;
+                    };
+                    clipboard_manager.stdout_mutex.lock();
+                    defer clipboard_manager.stdout_mutex.unlock();
+                    try sendPinResultById(allocator, stdout, entry_id, pinned);
+                    try sendClipboardEntries(allocator, stdout, clipboard_manager);
+                } else |_| {
+                    clipboard_manager.stdout_mutex.lock();
+                    defer clipboard_manager.stdout_mutex.unlock();
+                    try stdout.writeAll("{\"type\":\"error\",\"message\":\"Invalid id\"}\n");
                 }
             } else if (std.mem.startsWith(u8, trimmed, "toggle-pin:")) {
                 const index_str = trimmed["toggle-pin:".len..];
@@ -200,7 +252,7 @@ fn runJsonApi(allocator: std.mem.Allocator, clipboard_manager: *manager.Clipboar
                     };
                     clipboard_manager.stdout_mutex.lock();
                     defer clipboard_manager.stdout_mutex.unlock();
-                    try sendPinResult(allocator, stdout, index, pinned);
+                    try sendPinResultByIndex(allocator, stdout, index, pinned);
                     try sendClipboardEntries(allocator, stdout, clipboard_manager);
                 } else |_| {
                     clipboard_manager.stdout_mutex.lock();
@@ -228,13 +280,29 @@ fn runJsonApi(allocator: std.mem.Allocator, clipboard_manager: *manager.Clipboar
     }
 }
 
+fn appendJsonEscapedString(allocator: std.mem.Allocator, output: *std.ArrayList(u8), value: []const u8) !void {
+    for (value) |char| {
+        switch (char) {
+            '"' => try output.appendSlice(allocator, "\\\""),
+            '\\' => try output.appendSlice(allocator, "\\\\"),
+            '\n' => try output.appendSlice(allocator, "\\n"),
+            '\r' => try output.appendSlice(allocator, "\\r"),
+            '\t' => try output.appendSlice(allocator, "\\t"),
+            '\x08' => try output.appendSlice(allocator, "\\b"),
+            '\x0c' => try output.appendSlice(allocator, "\\f"),
+            0x00...0x07, 0x0b, 0x0e...0x1f => try output.writer(allocator).print("\\u{X:0>4}", .{char}),
+            else => try output.append(allocator, char),
+        }
+    }
+}
+
 fn sendClipboardEntries(allocator: std.mem.Allocator, stdout: std.fs.File, clipboard_manager: *manager.ClipboardManager) !void {
-    const entry_count = clipboard_manager.getDisplayCount();
+    var snapshot = try clipboard_manager.snapshotDisplayEntries(allocator);
+    defer manager.ClipboardManager.freeDisplayEntriesSnapshot(allocator, &snapshot);
 
     try stdout.writeAll("{\"type\":\"entries\",\"data\":[");
 
-    for (0..entry_count) |i| {
-        const entry = clipboard_manager.getDisplayEntry(i) orelse continue;
+    for (snapshot.items, 0..) |entry, i| {
         if (i > 0) {
             try stdout.writeAll(",");
         }
@@ -242,16 +310,7 @@ fn sendClipboardEntries(allocator: std.mem.Allocator, stdout: std.fs.File, clipb
         var escaped_content = std.ArrayList(u8){};
         defer escaped_content.deinit(allocator);
 
-        for (entry.content) |char| {
-            switch (char) {
-                '"' => try escaped_content.appendSlice(allocator, "\\\""),
-                '\\' => try escaped_content.appendSlice(allocator, "\\\\"),
-                '\n' => try escaped_content.appendSlice(allocator, "\\n"),
-                '\r' => try escaped_content.appendSlice(allocator, "\\r"),
-                '\t' => try escaped_content.appendSlice(allocator, "\\t"),
-                else => try escaped_content.append(allocator, char),
-            }
-        }
+        try appendJsonEscapedString(allocator, &escaped_content, entry.content);
 
         const entry_type_str = switch (entry.entry_type) {
             .text => "text",
@@ -260,7 +319,7 @@ fn sendClipboardEntries(allocator: std.mem.Allocator, stdout: std.fs.File, clipb
             .url => "url",
             .color => "color",
         };
-        const json_entry = try std.fmt.allocPrint(allocator, "{{\"id\":{d},\"content\":\"{s}\",\"timestamp\":{d},\"type\":\"{s}\",\"isCurrent\":{s},\"pinned\":{s}}}", .{ i + 1, escaped_content.items, entry.timestamp * 1000, entry_type_str, if (i == 0) "true" else "false", if (entry.pinned) "true" else "false" });
+        const json_entry = try std.fmt.allocPrint(allocator, "{{\"id\":{d},\"content\":\"{s}\",\"timestamp\":{d},\"type\":\"{s}\",\"isCurrent\":{s},\"pinned\":{s}}}", .{ entry.id, escaped_content.items, entry.timestamp * 1000, entry_type_str, if (entry.is_current) "true" else "false", if (entry.pinned) "true" else "false" });
         defer allocator.free(json_entry);
 
         try stdout.writeAll(json_entry);
@@ -269,27 +328,37 @@ fn sendClipboardEntries(allocator: std.mem.Allocator, stdout: std.fs.File, clipb
     try stdout.writeAll("]}\n");
 }
 
-fn sendSelectResult(allocator: std.mem.Allocator, stdout: std.fs.File, index: usize, success: bool) !void {
-    if (success) {
-        const response = try std.fmt.allocPrint(allocator, "{{\"type\":\"select-success\",\"index\":{d}}}\n", .{index});
-        defer allocator.free(response);
-        try stdout.writeAll(response);
-    } else {
-        try stdout.writeAll("{\"type\":\"error\",\"message\":\"Failed to select entry\"}\n");
-    }
+fn sendSelectResultById(allocator: std.mem.Allocator, stdout: std.fs.File, entry_id: u64) !void {
+    const response = try std.fmt.allocPrint(allocator, "{{\"type\":\"select-success\",\"id\":{d}}}\n", .{entry_id});
+    defer allocator.free(response);
+    try stdout.writeAll(response);
 }
 
-fn sendRemoveResult(allocator: std.mem.Allocator, stdout: std.fs.File, index: usize, success: bool) !void {
-    if (success) {
-        const response = try std.fmt.allocPrint(allocator, "{{\"type\":\"remove-success\",\"index\":{d}}}\n", .{index});
-        defer allocator.free(response);
-        try stdout.writeAll(response);
-    } else {
-        try stdout.writeAll("{\"type\":\"error\",\"message\":\"Failed to remove entry\"}\n");
-    }
+fn sendSelectResultByIndex(allocator: std.mem.Allocator, stdout: std.fs.File, index: usize) !void {
+    const response = try std.fmt.allocPrint(allocator, "{{\"type\":\"select-success\",\"index\":{d}}}\n", .{index});
+    defer allocator.free(response);
+    try stdout.writeAll(response);
 }
 
-fn sendPinResult(allocator: std.mem.Allocator, stdout: std.fs.File, index: usize, pinned: bool) !void {
+fn sendRemoveResultById(allocator: std.mem.Allocator, stdout: std.fs.File, entry_id: u64) !void {
+    const response = try std.fmt.allocPrint(allocator, "{{\"type\":\"remove-success\",\"id\":{d}}}\n", .{entry_id});
+    defer allocator.free(response);
+    try stdout.writeAll(response);
+}
+
+fn sendRemoveResultByIndex(allocator: std.mem.Allocator, stdout: std.fs.File, index: usize) !void {
+    const response = try std.fmt.allocPrint(allocator, "{{\"type\":\"remove-success\",\"index\":{d}}}\n", .{index});
+    defer allocator.free(response);
+    try stdout.writeAll(response);
+}
+
+fn sendPinResultById(allocator: std.mem.Allocator, stdout: std.fs.File, entry_id: u64, pinned: bool) !void {
+    const response = try std.fmt.allocPrint(allocator, "{{\"type\":\"pin-toggled\",\"id\":{d},\"pinned\":{s}}}\n", .{ entry_id, if (pinned) "true" else "false" });
+    defer allocator.free(response);
+    try stdout.writeAll(response);
+}
+
+fn sendPinResultByIndex(allocator: std.mem.Allocator, stdout: std.fs.File, index: usize, pinned: bool) !void {
     const response = try std.fmt.allocPrint(allocator, "{{\"type\":\"pin-toggled\",\"index\":{d},\"pinned\":{s}}}\n", .{ index, if (pinned) "true" else "false" });
     defer allocator.free(response);
     try stdout.writeAll(response);

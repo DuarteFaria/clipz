@@ -9,10 +9,7 @@ pub const ImageStorageError = error{
 };
 
 const IMAGE_STORAGE_DIR = "/tmp/clipz_images";
-
-pub fn getImageStoragePath() []const u8 {
-    return IMAGE_STORAGE_DIR;
-}
+const IMAGE_STORAGE_PREFIX = IMAGE_STORAGE_DIR ++ "/";
 
 pub fn ensureImageDir() !void {
     switch (builtin.os.tag) {
@@ -21,6 +18,7 @@ pub fn ensureImageDir() !void {
                 error.AccessDenied => return ImageStorageError.FailedToCreateDir,
                 else => return err,
             };
+            std.posix.fchmodat(std.posix.AT.FDCWD, IMAGE_STORAGE_DIR, 0o700, 0) catch {};
         },
         else => return ImageStorageError.UnsupportedPlatform,
     }
@@ -93,15 +91,20 @@ pub fn saveImageFromClipboard(allocator: std.mem.Allocator, format: []const u8) 
                 return ImageStorageError.FailedToSaveImage;
             }
 
+            std.posix.fchmodat(std.posix.AT.FDCWD, file_path, 0o600, 0) catch {};
             return file_path;
         },
         else => return ImageStorageError.UnsupportedPlatform,
     }
 }
 
+fn isManagedTempImagePath(path: []const u8) bool {
+    return std.mem.eql(u8, path, IMAGE_STORAGE_DIR) or std.mem.startsWith(u8, path, IMAGE_STORAGE_PREFIX);
+}
+
 pub fn deleteImageFile(file_path: []const u8) !void {
     // Only delete files in our temp directory for safety
-    if (!std.mem.startsWith(u8, file_path, IMAGE_STORAGE_DIR)) {
+    if (!isManagedTempImagePath(file_path)) {
         return ImageStorageError.InvalidPath;
     }
 
@@ -112,7 +115,7 @@ pub fn deleteImageFile(file_path: []const u8) !void {
 }
 
 pub fn isTempImagePath(path: []const u8) bool {
-    return std.mem.startsWith(u8, path, IMAGE_STORAGE_DIR);
+    return isManagedTempImagePath(path);
 }
 
 pub fn compareImageFiles(file1_path: []const u8, file2_path: []const u8) !bool {

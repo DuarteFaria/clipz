@@ -97,15 +97,20 @@ pub const ClipboardUI = struct {
 };
 
 pub fn printEntries(clipboard_entries: *manager.ClipboardManager) void {
-    const entry_count = clipboard_entries.getDisplayCount();
+    var entries = clipboard_entries.snapshotDisplayEntries(clipboard_entries.allocator) catch {
+        std.debug.print("Failed to read clipboard entries.\n", .{});
+        return;
+    };
+    defer manager.ClipboardManager.freeDisplayEntriesSnapshot(clipboard_entries.allocator, &entries);
+
+    const entry_count = entries.items.len;
 
     std.debug.print("\x1b[2J\x1b[H", .{});
 
     std.debug.print("\nClipboard History ({d} entries):\n", .{entry_count});
     std.debug.print("----------------------------------------\n", .{});
 
-    for (0..entry_count) |i| {
-        const entry = clipboard_entries.getDisplayEntry(i) orelse continue;
+    for (entries.items, 0..) |entry, i| {
         const timestamp = entry.timestamp;
         const now = std.time.timestamp();
         const age_secs = now - timestamp;

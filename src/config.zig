@@ -31,17 +31,6 @@ pub const Config = struct {
         };
     }
 
-    pub fn ultraLowPower() Config {
-        return Config{
-            .min_poll_interval = 500, // Very slow polling
-            .max_poll_interval = 2000, // 2 second max delay
-            .inactive_threshold = 120, // Consider inactive quickly (2 min)
-            .batch_save_interval = 60, // Save only every minute
-            .force_save_cycles = 50, // Check saves very rarely
-            .max_entries = 5, // Keep fewer entries
-        };
-    }
-
     pub fn responsive() Config {
         return Config{
             .min_poll_interval = 50, // Faster polling

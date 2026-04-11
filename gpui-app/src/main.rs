@@ -28,11 +28,15 @@ use serde::Deserialize;
 
 #[cfg(target_os = "macos")]
 use {
-    cocoa::appkit::{NSStatusBar, NSStatusItem, NSSquareStatusItemLength},
+    cocoa::appkit::{NSSquareStatusItemLength, NSStatusBar, NSStatusItem},
     cocoa::base::{id, nil},
     cocoa::foundation::NSString,
     objc::{
-        class, declare::ClassDecl, msg_send, runtime::{Object, Sel}, sel, sel_impl,
+        class,
+        declare::ClassDecl,
+        msg_send,
+        runtime::{Object, Sel},
+        sel, sel_impl,
     },
 };
 
@@ -48,27 +52,30 @@ static mut STATUS_ITEM: *mut Object = std::ptr::null_mut();
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type")]
-#[allow(dead_code)]
 enum BackendMessage {
     #[serde(rename = "entries")]
     Entries { data: Vec<Entry> },
     #[serde(rename = "select-success")]
-    SelectSuccess { index: usize },
+    SelectSuccess,
     #[serde(rename = "remove-success")]
-    RemoveSuccess { index: usize },
+    RemoveSuccess,
     #[serde(rename = "pin-toggled")]
-    PinToggled { index: usize, pinned: bool },
+    PinToggled,
     #[serde(rename = "success")]
-    Success { message: String },
+    Success,
     #[serde(rename = "ready")]
-    Ready,
+    Ready {
+        #[serde(default)]
+        #[serde(rename = "supportsIdCommands")]
+        supports_id_commands: bool,
+    },
     #[serde(other)]
     Unknown,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 struct Entry {
-    id: usize,
+    id: u64,
     content: String,
     timestamp: i64,
     #[serde(default)]
@@ -81,20 +88,15 @@ struct Entry {
     pinned: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 enum EntryType {
+    #[default]
     Text,
     Image,
     File,
     Url,
     Color,
-}
-
-impl Default for EntryType {
-    fn default() -> Self {
-        EntryType::Text
-    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -201,8 +203,6 @@ impl AssetSource for FileSystemAssets {
         Ok(Vec::new())
     }
 }
-
-const CURRENT_ENTRY_ID: usize = 1;
 
 fn discover_backend_binary() -> Result<PathBuf> {
     let cwd = std::env::current_dir()?;
@@ -326,8 +326,7 @@ fn setup_menu_bar_icon() {
         let button: id = status_item.button();
 
         // Use NSImage from SF Symbols (macOS 11+) for a native menu bar look
-        let symbol_name = cocoa::foundation::NSString::alloc(nil)
-            .init_str("clipboard");
+        let symbol_name = cocoa::foundation::NSString::alloc(nil).init_str("clipboard");
         let ns_image: id = msg_send![class!(NSImage), imageWithSystemSymbolName: symbol_name
                                                       accessibilityDescription: nil];
         if !ns_image.is_null() {
@@ -407,6 +406,7 @@ type SharedEntries = Arc<Mutex<Vec<Entry>>>;
 struct MenuBarPopover {
     entries: SharedEntries,
     backend_tx: Sender<String>,
+    supports_id_commands: Arc<AtomicBool>,
     focus_handle: FocusHandle,
     focused_index: Option<usize>,
     scroll_handle: ScrollHandle,
@@ -423,6 +423,7 @@ impl MenuBarPopover {
     fn new(
         entries: SharedEntries,
         backend_tx: Sender<String>,
+        supports_id_commands: Arc<AtomicBool>,
         window: &mut Window,
         cx: &mut GpuiContext<Self>,
     ) -> Self {
@@ -438,6 +439,7 @@ impl MenuBarPopover {
         Self {
             entries,
             backend_tx,
+            supports_id_commands,
             focus_handle,
             focused_index: Some(0),
             scroll_handle: ScrollHandle::new(),
@@ -445,18 +447,30 @@ impl MenuBarPopover {
         }
     }
 
-    fn select_entry(&self, id: usize) {
-        let _ = self.backend_tx.send(format!("select-entry:{id}"));
+    fn select_entry(&self, id: u64, legacy_index: usize) {
+        if self.supports_id_commands.load(Ordering::Acquire) {
+            let _ = self.backend_tx.send(format!("select-entry-id:{id}"));
+        } else {
+            let _ = self.backend_tx.send(format!("select-entry:{legacy_index}"));
+        }
         let _ = self.backend_tx.send("get-entries".into());
     }
 
-    fn remove_entry(&self, id: usize) {
-        let _ = self.backend_tx.send(format!("remove-entry:{id}"));
+    fn remove_entry(&self, id: u64, legacy_index: usize) {
+        if self.supports_id_commands.load(Ordering::Acquire) {
+            let _ = self.backend_tx.send(format!("remove-entry-id:{id}"));
+        } else {
+            let _ = self.backend_tx.send(format!("remove-entry:{legacy_index}"));
+        }
         let _ = self.backend_tx.send("get-entries".into());
     }
 
-    fn toggle_pin(&self, id: usize) {
-        let _ = self.backend_tx.send(format!("toggle-pin:{id}"));
+    fn toggle_pin(&self, id: u64, legacy_index: usize) {
+        if self.supports_id_commands.load(Ordering::Acquire) {
+            let _ = self.backend_tx.send(format!("toggle-pin-id:{id}"));
+        } else {
+            let _ = self.backend_tx.send(format!("toggle-pin:{legacy_index}"));
+        }
     }
 
     fn render_popover_entry(
@@ -499,6 +513,7 @@ impl MenuBarPopover {
         let view = view_entity.clone();
         let view_remove = view_entity.clone();
         let view_pin = view_entity.clone();
+        let legacy_index = idx + 1;
         let entry_id_str = SharedString::from(format!("pop-entry-{}", id));
 
         div()
@@ -570,12 +585,7 @@ impl MenuBarPopover {
                             .flex()
                             .items_center()
                             .gap_1()
-                            .child(
-                                div()
-                                    .text_color(rgb(ic))
-                                    .text_size(px(10.0))
-                                    .child(tl),
-                            )
+                            .child(div().text_color(rgb(ic)).text_size(px(10.0)).child(tl))
                             .when(is_pinned, |el| {
                                 el.child(
                                     div()
@@ -625,12 +635,12 @@ impl MenuBarPopover {
                     .on_click(move |_, _, app| {
                         app.stop_propagation();
                         view_pin.update(app, |this, cx| {
-                            this.toggle_pin(id);
+                            this.toggle_pin(id, legacy_index);
                             cx.notify();
                         });
                     }),
             )
-            .when(id != CURRENT_ENTRY_ID, |el| {
+            .when(!is_current, |el| {
                 el.child(
                     div()
                         .id(SharedString::from(format!("pop-remove-{}", id)))
@@ -648,7 +658,7 @@ impl MenuBarPopover {
                         .on_click(move |_, _, app| {
                             app.stop_propagation();
                             view_remove.update(app, |this, cx| {
-                                this.remove_entry(id);
+                                this.remove_entry(id, legacy_index);
                                 cx.notify();
                             });
                         }),
@@ -656,7 +666,7 @@ impl MenuBarPopover {
             })
             .on_click(move |_, _, app| {
                 view.update(app, |this, cx| {
-                    this.select_entry(id);
+                    this.select_entry(id, legacy_index);
                     // Signal to close popover after selecting
                     MENU_BAR_CLICKED.store(true, Ordering::SeqCst);
                     cx.notify();
@@ -720,7 +730,11 @@ impl Render for MenuBarPopover {
                     match key_str.as_str() {
                         "\"up\"" | "\"arrowup\"" | "up" | "arrowup" => {
                             let new_idx = if let Some(idx) = this.focused_index {
-                                if idx > 0 { idx - 1 } else { count - 1 }
+                                if idx > 0 {
+                                    idx - 1
+                                } else {
+                                    count - 1
+                                }
                             } else {
                                 0
                             };
@@ -730,7 +744,11 @@ impl Render for MenuBarPopover {
                         }
                         "\"down\"" | "\"arrowdown\"" | "down" | "arrowdown" => {
                             let new_idx = if let Some(idx) = this.focused_index {
-                                if idx < count - 1 { idx + 1 } else { 0 }
+                                if idx < count - 1 {
+                                    idx + 1
+                                } else {
+                                    0
+                                }
                             } else {
                                 0
                             };
@@ -742,7 +760,7 @@ impl Render for MenuBarPopover {
                             if let Some(idx) = this.focused_index {
                                 let entries = this.entries.lock().unwrap().clone();
                                 if let Some(entry) = entries.get(idx) {
-                                    this.select_entry(entry.id);
+                                    this.select_entry(entry.id, idx + 1);
                                     MENU_BAR_CLICKED.store(true, Ordering::SeqCst);
                                 }
                             }
@@ -800,7 +818,9 @@ impl Render for MenuBarPopover {
                                     .rounded(px(6.0))
                                     .text_size(px(10.0))
                                     .text_color(rgb(TEXT_SECONDARY))
-                                    .hover(|style| style.bg(rgba(0xff453a18)).text_color(rgb(DANGER)))
+                                    .hover(|style| {
+                                        style.bg(rgba(0xff453a18)).text_color(rgb(DANGER))
+                                    })
                                     .cursor_pointer()
                                     .child("Clear All")
                                     .on_click(move |_, _, app| {
@@ -820,7 +840,9 @@ impl Render for MenuBarPopover {
                                     .rounded(px(6.0))
                                     .text_size(px(10.0))
                                     .text_color(rgb(TEXT_SECONDARY))
-                                    .hover(|style| style.bg(rgba(0xff453a18)).text_color(rgb(DANGER)))
+                                    .hover(|style| {
+                                        style.bg(rgba(0xff453a18)).text_color(rgb(DANGER))
+                                    })
                                     .cursor_pointer()
                                     .child("Quit")
                                     .on_click(move |_, _, _app| {
@@ -839,6 +861,7 @@ impl Render for MenuBarPopover {
 struct AppState {
     backend: Option<BackendHandle>,
     shared_entries: SharedEntries,
+    supports_id_commands: Arc<AtomicBool>,
     _hotkey_manager: GlobalHotKeyManager,
     hotkey_rx: Receiver<()>,
     popover_handle: Option<WindowHandle<MenuBarPopover>>,
@@ -868,6 +891,7 @@ impl AppState {
 
         let shared = self.shared_entries.clone();
         let backend_tx = self.backend.as_ref().map(|b| b.tx.clone());
+        let supports_id_commands = self.supports_id_commands.clone();
 
         if let Some(tx) = backend_tx {
             let handle = cx
@@ -885,7 +909,9 @@ impl AppState {
                         ..Default::default()
                     },
                     |window, cx| {
-                        cx.new(|cx| MenuBarPopover::new(shared, tx, window, cx))
+                        cx.new(|cx| {
+                            MenuBarPopover::new(shared, tx, supports_id_commands, window, cx)
+                        })
                     },
                 )
                 .ok();
@@ -905,11 +931,19 @@ impl AppState {
                         }
                         entries_changed = true;
                     }
-                    BackendMessage::SelectSuccess { .. }
-                    | BackendMessage::RemoveSuccess { .. }
-                    | BackendMessage::PinToggled { .. }
-                    | BackendMessage::Success { .. }
-                    | BackendMessage::Ready => {
+                    BackendMessage::SelectSuccess
+                    | BackendMessage::RemoveSuccess
+                    | BackendMessage::PinToggled
+                    | BackendMessage::Success => {
+                        if let Err(e) = backend.send("get-entries") {
+                            eprintln!("Failed to refresh entries: {}", e);
+                        }
+                    }
+                    BackendMessage::Ready {
+                        supports_id_commands,
+                    } => {
+                        self.supports_id_commands
+                            .store(supports_id_commands, Ordering::Release);
                         if let Err(e) = backend.send("get-entries") {
                             eprintln!("Failed to refresh entries: {}", e);
                         }
@@ -1022,6 +1056,7 @@ fn main() {
             });
 
             let shared_entries: SharedEntries = Arc::new(Mutex::new(Vec::new()));
+            let supports_id_commands = Arc::new(AtomicBool::new(false));
             let backend = BackendHandle::start().ok();
 
             if let Some(ref b) = backend {
@@ -1033,6 +1068,7 @@ fn main() {
             let app_state = cx.new(|_| AppState {
                 backend,
                 shared_entries,
+                supports_id_commands,
                 _hotkey_manager: hotkey_manager,
                 hotkey_rx,
                 popover_handle: None,
@@ -1040,4 +1076,37 @@ fn main() {
 
             start_poll_loop(app_state, cx);
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backend_message_accepts_id_and_legacy_index_fields() {
+        let from_id: BackendMessage =
+            serde_json::from_str(r#"{"type":"select-success","id":42}"#).unwrap();
+        assert!(matches!(from_id, BackendMessage::SelectSuccess));
+
+        let from_index: BackendMessage =
+            serde_json::from_str(r#"{"type":"remove-success","index":7}"#).unwrap();
+        assert!(matches!(from_index, BackendMessage::RemoveSuccess));
+    }
+
+    #[test]
+    fn entries_payload_parses_escaped_control_characters() {
+        let msg: BackendMessage = serde_json::from_str(
+            r#"{"type":"entries","data":[{"id":1,"content":"hello\n\b\f","timestamp":1000,"type":"text","isCurrent":true,"pinned":false}]}"#,
+        )
+        .unwrap();
+
+        match msg {
+            BackendMessage::Entries { data } => {
+                assert_eq!(data.len(), 1);
+                assert_eq!(data[0].content, "hello\n\u{0008}\u{000C}");
+                assert!(data[0].is_current);
+            }
+            _ => panic!("expected entries payload"),
+        }
+    }
 }
