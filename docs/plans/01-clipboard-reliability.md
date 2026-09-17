@@ -2,9 +2,9 @@
 
 ## Status
 
-Implementation is in progress on `plan/clipboard-reliability`. Automated backend,
-protocol, and frontend tests pass locally. Keep this PR in draft until CI and the
-manual macOS checks below have been reviewed.
+Implementation is complete. Automated backend, protocol, and frontend tests pass,
+and CI is green. DuarteFaria confirmed all required manual macOS checks passed,
+including file restoration after switching between history entries.
 
 This is milestone 1 of 3. Merge before milestone 2 (keyboard navigation and
 search), then milestone 3 (runtime overhead and ownership).
@@ -85,12 +85,12 @@ objects and is verified on isolated macOS pasteboards through file → text → 
 including special/Unicode filenames and folders. Missing-file validation leaves
 the existing pasteboard unchanged. Protocol errors
 identify capture versus restore, and successful retries clear only the matching
-transient warning. Tests cover restored-alias recapture and capture recovery;
-the reported real Finder workflow still needs a user recheck.
+transient warning. Tests cover restored-alias recapture and capture recovery.
+DuarteFaria rechecked the real Finder workflow and confirmed it works.
 
-## Manual macOS checks still required
+## Manual macOS checks — passed
 
-- [ ] Copy and restore real text, Finder files/folders, and PNG/JPEG/TIFF images.
-- [ ] Verify the error banner, Dismiss, and Restart backend in the actual popover.
-- [ ] Quit through the menu, relaunch, and confirm the most recent history and
+- [x] Copy and restore real text, Finder files/folders, and PNG/JPEG/TIFF images.
+- [x] Verify the error banner, Dismiss, and Restart backend in the actual popover.
+- [x] Quit through the menu, relaunch, and confirm the most recent history and
   images are present.
