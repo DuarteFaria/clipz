@@ -10,7 +10,7 @@ use std::{
         Arc, Mutex,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, Context, Result};
@@ -63,6 +63,10 @@ enum BackendMessage {
     PinToggled,
     #[serde(rename = "success")]
     Success,
+    #[serde(rename = "error")]
+    Error { message: String },
+    #[serde(skip)]
+    TransportError { message: String },
     #[serde(rename = "ready")]
     Ready {
         #[serde(default)]
@@ -129,7 +133,8 @@ impl BackendHandle {
         let (cmd_tx, cmd_rx) = mpsc::channel::<String>();
         let (msg_tx, msg_rx) = mpsc::channel::<BackendMessage>();
 
-        thread::spawn(move || pump_commands(stdin, cmd_rx));
+        let command_errors = msg_tx.clone();
+        thread::spawn(move || pump_commands(stdin, cmd_rx, command_errors));
         thread::spawn(move || pump_messages(stdout, msg_tx));
 
         Ok(Self {
@@ -138,34 +143,43 @@ impl BackendHandle {
             rx: msg_rx,
         })
     }
-
-    fn send(&self, command: impl Into<String>) -> Result<()> {
-        self.tx
-            .send(command.into())
-            .map_err(|_| BackendError::SendFailed.into())
-    }
 }
 
 impl Drop for BackendHandle {
     fn drop(&mut self) {
         let _ = self.tx.send("quit".into());
         if let Some(mut child) = self.child.take() {
-            thread::sleep(Duration::from_millis(100));
-            let _ = child.kill();
-            let _ = child.wait();
+            shutdown_child(&mut child, Duration::from_secs(2));
         }
-        std::process::exit(0);
     }
 }
 
-fn pump_commands(mut stdin: impl Write + Send + 'static, rx: Receiver<String>) {
+fn shutdown_child(child: &mut Child, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+            _ => break,
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn pump_commands(
+    mut stdin: impl Write + Send + 'static,
+    rx: Receiver<String>,
+    errors: Sender<BackendMessage>,
+) {
     for command in rx {
-        if let Err(e) = writeln!(stdin, "{}", command) {
-            eprintln!("Failed to write command to backend: {}", e);
+        if let Err(e) = writeln!(stdin, "{}", command).and_then(|_| stdin.flush()) {
+            let _ = errors.send(BackendMessage::TransportError {
+                message: format!("Could not send command to backend: {e}"),
+            });
             break;
         }
-        if let Err(e) = stdin.flush() {
-            eprintln!("Failed to flush stdin: {}", e);
+        if command == "quit" {
             break;
         }
     }
@@ -176,18 +190,26 @@ fn pump_messages(stdout: impl std::io::Read + Send + 'static, tx: Sender<Backend
     for line in reader.lines() {
         match line {
             Ok(line) => {
-                if let Ok(msg) = serde_json::from_str::<BackendMessage>(&line) {
-                    if tx.send(msg).is_err() {
-                        break;
+                let msg = serde_json::from_str::<BackendMessage>(&line).unwrap_or_else(|e| {
+                    BackendMessage::Error {
+                        message: format!("Invalid backend response: {e}"),
                     }
+                });
+                if tx.send(msg).is_err() {
+                    return;
                 }
             }
             Err(e) => {
-                eprintln!("Failed to read line from backend: {}", e);
-                break;
+                let _ = tx.send(BackendMessage::TransportError {
+                    message: format!("Could not read backend response: {e}"),
+                });
+                return;
             }
         }
     }
+    let _ = tx.send(BackendMessage::TransportError {
+        message: "Backend disconnected. Restart to reconnect.".into(),
+    });
 }
 
 struct FileSystemAssets;
@@ -401,11 +423,34 @@ fn get_status_item_position() -> Option<Point<Pixels>> {
 
 type SharedEntries = Arc<Mutex<Vec<Entry>>>;
 
+#[derive(Clone, Default)]
+struct BackendClient(Arc<Mutex<ConnectionState>>);
+
+#[derive(Default)]
+struct ConnectionState {
+    tx: Option<Sender<String>>,
+    error: Option<String>,
+    restart_requested: bool,
+    quit_requested: bool,
+}
+
+impl BackendClient {
+    fn send(&self, command: String) -> Result<()> {
+        let mut state = self.0.lock().unwrap();
+        if state.tx.as_ref().is_some_and(|tx| tx.send(command).is_ok()) {
+            return Ok(());
+        }
+        state.tx = None;
+        state.error = Some("Backend unavailable. Restart to reconnect.".into());
+        Err(BackendError::SendFailed.into())
+    }
+}
+
 // ---------- MenuBarPopover ----------
 
 struct MenuBarPopover {
     entries: SharedEntries,
-    backend_tx: Sender<String>,
+    backend_tx: BackendClient,
     supports_id_commands: Arc<AtomicBool>,
     focus_handle: FocusHandle,
     focused_index: Option<usize>,
@@ -422,7 +467,7 @@ impl Focusable for MenuBarPopover {
 impl MenuBarPopover {
     fn new(
         entries: SharedEntries,
-        backend_tx: Sender<String>,
+        backend_tx: BackendClient,
         supports_id_commands: Arc<AtomicBool>,
         window: &mut Window,
         cx: &mut GpuiContext<Self>,
@@ -706,6 +751,9 @@ impl Render for MenuBarPopover {
         let view_clear = view_entity.clone();
         let view_keyboard = view_entity.clone();
         let entry_count_for_keys = entries.len();
+        let error = self.backend_tx.0.lock().unwrap().error.clone();
+        let restart_client = self.backend_tx.clone();
+        let dismiss_client = self.backend_tx.clone();
 
         window.focus(&self.focus_handle);
 
@@ -773,6 +821,34 @@ impl Render for MenuBarPopover {
                         _ => {}
                     }
                 });
+            })
+            .when_some(error, |el, error| {
+                el.child(
+                    div()
+                        .px_3()
+                        .py_2()
+                        .text_xs()
+                        .text_color(rgb(ACCENT_ORANGE))
+                        .child(error)
+                        .child(
+                            div()
+                                .id("restart-backend")
+                                .cursor_pointer()
+                                .child("Restart backend")
+                                .on_click(move |_, _, _| {
+                                    restart_client.0.lock().unwrap().restart_requested = true;
+                                }),
+                        )
+                        .child(
+                            div()
+                                .id("dismiss-backend-error")
+                                .cursor_pointer()
+                                .child("Dismiss")
+                                .on_click(move |_, _, _| {
+                                    dismiss_client.0.lock().unwrap().error = None;
+                                }),
+                        ),
+                )
             })
             // Entry list
             .child(
@@ -846,9 +922,7 @@ impl Render for MenuBarPopover {
                                     .cursor_pointer()
                                     .child("Quit")
                                     .on_click(move |_, _, _app| {
-                                        let _ = quit_tx.send("quit".into());
-                                        thread::sleep(Duration::from_millis(150));
-                                        std::process::exit(0);
+                                        quit_tx.0.lock().unwrap().quit_requested = true;
                                     })
                             }),
                     ),
@@ -860,6 +934,9 @@ impl Render for MenuBarPopover {
 
 struct AppState {
     backend: Option<BackendHandle>,
+    backend_client: BackendClient,
+    lifecycle_rx: Option<Receiver<Result<Option<BackendHandle>>>>,
+    quitting: bool,
     shared_entries: SharedEntries,
     supports_id_commands: Arc<AtomicBool>,
     _hotkey_manager: GlobalHotKeyManager,
@@ -868,6 +945,69 @@ struct AppState {
 }
 
 impl AppState {
+    fn poll_lifecycle(&mut self, cx: &mut App) {
+        let (restart, quit) = {
+            let mut state = self.backend_client.0.lock().unwrap();
+            (
+                std::mem::take(&mut state.restart_requested),
+                std::mem::take(&mut state.quit_requested),
+            )
+        };
+        self.quitting |= quit;
+        if (restart || self.quitting) && self.lifecycle_rx.is_none() {
+            self.supports_id_commands.store(false, Ordering::Release);
+            // IDs and legacy indices belong to one backend session.
+            self.shared_entries.lock().unwrap().clear();
+            let mut state = self.backend_client.0.lock().unwrap();
+            state.tx = None;
+            state.error = Some(if self.quitting {
+                "Shutting down backend…".into()
+            } else {
+                "Restarting backend…".into()
+            });
+            let old_backend = self.backend.take();
+            let quitting = self.quitting;
+            let (tx, rx) = mpsc::channel();
+            self.lifecycle_rx = Some(rx);
+            // Waiting for persistence must not freeze the UI.
+            thread::spawn(move || {
+                drop(old_backend);
+                let result = if quitting {
+                    Ok(None)
+                } else {
+                    BackendHandle::start().map(Some)
+                };
+                let _ = tx.send(result);
+            });
+        }
+        let result = self
+            .lifecycle_rx
+            .as_ref()
+            .and_then(|rx| match rx.try_recv() {
+                Ok(result) => Some(result),
+                Err(mpsc::TryRecvError::Empty) => None,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    Some(Err(anyhow!("Backend restart failed")))
+                }
+            });
+        if let Some(result) = result {
+            self.lifecycle_rx = None;
+            match result {
+                Ok(None) => cx.quit(),
+                Ok(Some(backend)) => {
+                    let mut state = self.backend_client.0.lock().unwrap();
+                    state.tx = Some(backend.tx.clone());
+                    state.error = None;
+                    self.backend = Some(backend);
+                }
+                Err(error) => {
+                    self.backend_client.0.lock().unwrap().error =
+                        Some(format!("Could not start backend: {error:#}"));
+                }
+            }
+        }
+    }
+
     fn toggle_popover(&mut self, cx: &mut App) {
         if let Some(handle) = self.popover_handle.take() {
             let _ = handle.update(cx, |_, window, _| {
@@ -890,10 +1030,10 @@ impl AppState {
         };
 
         let shared = self.shared_entries.clone();
-        let backend_tx = self.backend.as_ref().map(|b| b.tx.clone());
+        let backend_tx = self.backend_client.clone();
         let supports_id_commands = self.supports_id_commands.clone();
 
-        if let Some(tx) = backend_tx {
+        {
             let handle = cx
                 .open_window(
                     WindowOptions {
@@ -910,7 +1050,13 @@ impl AppState {
                     },
                     |window, cx| {
                         cx.new(|cx| {
-                            MenuBarPopover::new(shared, tx, supports_id_commands, window, cx)
+                            MenuBarPopover::new(
+                                shared,
+                                backend_tx,
+                                supports_id_commands,
+                                window,
+                                cx,
+                            )
                         })
                     },
                 )
@@ -935,18 +1081,26 @@ impl AppState {
                     | BackendMessage::RemoveSuccess
                     | BackendMessage::PinToggled
                     | BackendMessage::Success => {
-                        if let Err(e) = backend.send("get-entries") {
-                            eprintln!("Failed to refresh entries: {}", e);
-                        }
+                        let _ = self.backend_client.send("get-entries".into());
                     }
                     BackendMessage::Ready {
                         supports_id_commands,
                     } => {
                         self.supports_id_commands
                             .store(supports_id_commands, Ordering::Release);
-                        if let Err(e) = backend.send("get-entries") {
-                            eprintln!("Failed to refresh entries: {}", e);
-                        }
+                        let _ = self.backend_client.send("get-entries".into());
+                    }
+                    BackendMessage::Error { message } => {
+                        self.backend_client.0.lock().unwrap().error = Some(message);
+                        entries_changed = true;
+                    }
+                    BackendMessage::TransportError { message } => {
+                        let mut state = self.backend_client.0.lock().unwrap();
+                        state.tx = None;
+                        // Keep the specific failure if EOF follows an error response.
+                        state.error.get_or_insert(message);
+                        self.supports_id_commands.store(false, Ordering::Release);
+                        entries_changed = true;
                     }
                     BackendMessage::Unknown => {}
                 }
@@ -961,10 +1115,12 @@ fn start_poll_loop(app_state: Entity<AppState>, cx: &mut App) {
     let async_cx = cx.to_async();
     cx.foreground_executor()
         .spawn(async move {
+            let mut last_error = None;
             loop {
                 bg_executor.timer(Duration::from_millis(100)).await;
                 let result = async_cx.update(|cx| {
                     app_state.update(cx, |state, cx| {
+                        state.poll_lifecycle(cx);
                         let mut needs_notify = false;
 
                         // Handle hotkey
@@ -992,6 +1148,18 @@ fn start_poll_loop(app_state: Entity<AppState>, cx: &mut App) {
                             }
                         }
 
+                        // Also covers errors/dismissals produced by popover actions.
+                        let error = state.backend_client.0.lock().unwrap().error.clone();
+                        needs_notify |= error != last_error;
+                        if error.is_some()
+                            && error != last_error
+                            && state.popover_handle.is_none()
+                            && state.lifecycle_rx.is_none()
+                            && !state.quitting
+                        {
+                            state.toggle_popover(cx);
+                        }
+                        last_error = error;
                         if needs_notify {
                             if let Some(handle) = state.popover_handle {
                                 let _ = handle.update(cx, |_, _, cx| {
@@ -1057,16 +1225,24 @@ fn main() {
 
             let shared_entries: SharedEntries = Arc::new(Mutex::new(Vec::new()));
             let supports_id_commands = Arc::new(AtomicBool::new(false));
-            let backend = BackendHandle::start().ok();
-
-            if let Some(ref b) = backend {
-                if let Err(e) = b.send("get-entries") {
-                    eprintln!("Failed to refresh entries: {}", e);
+            let backend_client = BackendClient::default();
+            let backend = match BackendHandle::start() {
+                Ok(backend) => {
+                    backend_client.0.lock().unwrap().tx = Some(backend.tx.clone());
+                    Some(backend)
                 }
-            }
+                Err(error) => {
+                    backend_client.0.lock().unwrap().error =
+                        Some(format!("Could not start backend: {error:#}"));
+                    None
+                }
+            };
 
             let app_state = cx.new(|_| AppState {
                 backend,
+                backend_client,
+                lifecycle_rx: None,
+                quitting: false,
                 shared_entries,
                 supports_id_commands,
                 _hotkey_manager: hotkey_manager,
@@ -1081,6 +1257,165 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn errors_are_not_unknown_messages() {
+        let message: BackendMessage =
+            serde_json::from_str(r#"{"type":"error","message":"save failed"}"#).unwrap();
+        assert!(matches!(message, BackendMessage::Error { message } if message == "save failed"));
+        let message: BackendMessage = serde_json::from_str(r#"{"type":"future-message"}"#).unwrap();
+        assert!(matches!(message, BackendMessage::Unknown));
+    }
+
+    #[test]
+    fn malformed_response_and_disconnect_are_reported() {
+        let (tx, rx) = mpsc::channel();
+        pump_messages(&b"not json\n{\"type\":\"ready\"}\n"[..], tx);
+        assert!(matches!(rx.recv().unwrap(), BackendMessage::Error { .. }));
+        assert!(matches!(
+            rx.recv().unwrap(),
+            BackendMessage::Ready {
+                supports_id_commands: false
+            }
+        ));
+        assert!(matches!(
+            rx.recv().unwrap(),
+            BackendMessage::TransportError { .. }
+        ));
+    }
+
+    #[test]
+    fn broken_command_writer_is_reported() {
+        struct BrokenWriter;
+        impl Write for BrokenWriter {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let (tx, rx) = mpsc::channel();
+        let (errors, events) = mpsc::channel();
+        tx.send("get-entries".into()).unwrap();
+        pump_commands(BrokenWriter, rx, errors);
+        assert!(matches!(
+            events.recv().unwrap(),
+            BackendMessage::TransportError { .. }
+        ));
+    }
+
+    #[test]
+    fn unavailable_client_records_error() {
+        let client = BackendClient::default();
+        assert!(client.send("clear".into()).is_err());
+        assert!(client.0.lock().unwrap().error.is_some());
+    }
+
+    #[test]
+    fn existing_client_uses_restarted_connection_and_keeps_errors_until_dismissed() {
+        let client = BackendClient::default();
+        let popover_client = client.clone();
+        assert!(popover_client.send("get-entries".into()).is_err());
+        let (tx, rx) = mpsc::channel();
+        client.0.lock().unwrap().tx = Some(tx);
+        popover_client.send("get-entries".into()).unwrap();
+        assert_eq!(rx.recv().unwrap(), "get-entries");
+        assert!(client.0.lock().unwrap().error.is_some());
+    }
+
+    #[test]
+    fn read_failure_is_reported() {
+        struct BrokenReader;
+        impl std::io::Read for BrokenReader {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::Other.into())
+            }
+        }
+        let (tx, rx) = mpsc::channel();
+        pump_messages(BrokenReader, tx);
+        assert!(matches!(
+            rx.recv().unwrap(),
+            BackendMessage::TransportError { message } if message.contains("Could not read")
+        ));
+    }
+
+    #[test]
+    fn flush_failure_is_reported() {
+        struct BrokenFlush;
+        impl Write for BrokenFlush {
+            fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+                Ok(data.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+        }
+        let (tx, rx) = mpsc::channel();
+        let (errors, events) = mpsc::channel();
+        tx.send("get-entries".into()).unwrap();
+        pump_commands(BrokenFlush, rx, errors);
+        assert!(matches!(
+            events.recv().unwrap(),
+            BackendMessage::TransportError { .. }
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_allows_slow_graceful_exit() {
+        let mut child = Command::new("sh")
+            .args(["-c", "read command; sleep 0.25; exit 0"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        writeln!(child.stdin.take().unwrap(), "quit").unwrap();
+        let start = Instant::now();
+        shutdown_child(&mut child, Duration::from_secs(2));
+        assert!(start.elapsed() >= Duration::from_millis(200));
+        assert!(child.wait().unwrap().success());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dropping_handle_sends_quit_and_waits_without_exiting_application() {
+        let mut child = Command::new("sh")
+            .args([
+                "-c",
+                "read command; [ \"$command\" = quit ] && sleep 0.25 && printf saved",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let mut stdout = child.stdout.take().unwrap();
+        let (tx, commands) = mpsc::channel();
+        let (events, rx) = mpsc::channel();
+        let writer = thread::spawn(move || pump_commands(stdin, commands, events));
+        drop(BackendHandle {
+            child: Some(child),
+            tx,
+            rx,
+        });
+        writer.join().unwrap();
+        let mut output = String::new();
+        std::io::Read::read_to_string(&mut stdout, &mut output).unwrap();
+        assert_eq!(output, "saved");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_kills_and_reaps_unresponsive_child() {
+        let mut child = Command::new("sh")
+            .args(["-c", "exec sleep 30"])
+            .spawn()
+            .unwrap();
+        let start = Instant::now();
+        shutdown_child(&mut child, Duration::from_millis(50));
+        assert!(start.elapsed() < Duration::from_secs(2));
+        assert!(!child.wait().unwrap().success());
+    }
 
     #[test]
     fn backend_message_accepts_id_and_legacy_index_fields() {
