@@ -2,11 +2,12 @@
 
 ## Status
 
-Planning only; implementation has not started. Keep this PR in draft until its
-scope is implemented and its acceptance criteria are verified.
+Implementation is in progress. Automated frontend coverage and the normal
+macOS launch check pass; multi-monitor and shortcut-conflict workflows still
+require manual macOS checks.
 
-This is milestone 2 of 3. Depends on milestone 1 (clipboard reliability and
-recovery). Merge before milestone 3 (runtime overhead and ownership).
+This is milestone 2 of 3. It depends on milestone 1 (clipboard reliability and
+recovery) and should merge before milestone 3 (runtime overhead and ownership).
 
 ## Goal
 
@@ -34,13 +35,13 @@ out of these three milestones.
 
 ## Acceptance criteria
 
-- [ ] Incoming clipboard changes never silently move selection to a different item.
-- [ ] Search, navigation, selection, pinning, and deletion are keyboard-accessible.
-- [ ] Escape behaves consistently with empty history, active search, and normal results.
-- [ ] Shortcut settings survive restart; registration conflicts leave the app usable.
-- [ ] Displayed shortcut hints match the active bindings.
-- [ ] Successful selection closes the popover; failures remain visible.
-- [ ] Open, close, and toggle behavior is explicit and covered by tests.
+- [x] Incoming clipboard changes never silently move selection to a different item.
+- [x] Search, navigation, selection, pinning, and deletion are keyboard-accessible.
+- [x] Escape behaves consistently with empty history, active search, and normal results.
+- [x] Shortcut settings survive restart; registration conflicts leave the app usable.
+- [x] Displayed shortcut hints match the active bindings.
+- [x] Successful selection closes the popover; failures remain visible.
+- [x] Open, close, and toggle behavior is explicit and covered by tests.
 - [ ] Popover placement works across different display arrangements.
-- [ ] Enter remains a copy action, without automatic paste.
-- [ ] Regression tests and user documentation cover the keyboard workflow.
+- [x] Enter remains a copy action, without automatic paste.
+- [x] Regression tests and user documentation cover the keyboard workflow.

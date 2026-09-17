@@ -20,13 +20,20 @@ Grab `Clipz.dmg` from the [latest release](https://github.com/DuarteFaria/clipz/
 ## Usage
 
 Clipz lives in the menu bar. Click the clipboard icon or press **Command+Option+=**
-(the Equal key) to toggle the popover.
+(the Equal key) to toggle the popover. Click the shortcut shown in the popover
+footer to choose another shortcut; the choice is saved in
+`~/Library/Application Support/Clipz/settings.json`. If another app owns the
+shortcut, Clipz stays open and shows a warning so you can choose another.
 
-| Key           | Action                  |
-| ------------- | ----------------------- |
-| Arrow Up/Down | Navigate history        |
-| Enter         | Copy entry to clipboard |
-| Escape        | Close popover           |
+| Key                 | Action                                              |
+| ------------------- | --------------------------------------------------- |
+| Type                | Search content and entry type                       |
+| Arrow Up/Down       | Navigate search results                             |
+| Enter               | Copy entry to clipboard; close after success        |
+| Command+P           | Pin or unpin the focused entry                      |
+| Command+Backspace   | Delete the focused entry (except the current entry) |
+| Backspace           | Remove the last search character                    |
+| Escape              | Clear active search, otherwise close the popover    |
 
 ## Features
 

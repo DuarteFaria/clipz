@@ -19,12 +19,12 @@ use global_hotkey::{
     GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
 };
 use gpui::{
-    div, img, point, prelude::*, px, rgb, rgba, size, App, Application, AssetSource, Bounds,
-    Context as GpuiContext, Entity, FocusHandle, Focusable, IntoElement, Pixels, Point,
-    ScrollHandle, SharedString, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
-    WindowKind, WindowOptions,
+    actions, div, img, point, prelude::*, px, rgb, rgba, size, App, Application, AssetSource,
+    Bounds, Context as GpuiContext, Entity, FocusHandle, Focusable, IntoElement, KeyBinding,
+    Pixels, Point, ScrollHandle, SharedString, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowHandle, WindowKind, WindowOptions,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "macos")]
 use {
@@ -44,6 +44,73 @@ use {
 
 static MENU_BAR_CLICKED: AtomicBool = AtomicBool::new(false);
 static POPOVER_SHOULD_CLOSE: AtomicBool = AtomicBool::new(false);
+static POPOVER_SHOULD_OPEN: AtomicBool = AtomicBool::new(false);
+static CHANGE_SHORTCUT: AtomicBool = AtomicBool::new(false);
+
+actions!(
+    clipz,
+    [
+        FocusPrevious,
+        FocusNext,
+        SelectFocused,
+        ToggleFocusedPin,
+        DeleteFocused,
+        BackspaceSearch,
+        CancelOrClose,
+    ]
+);
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct Settings {
+    #[serde(default = "default_shortcut")]
+    shortcut: String,
+}
+
+fn default_shortcut() -> String {
+    "super+alt+Equal".into()
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            shortcut: default_shortcut(),
+        }
+    }
+}
+
+fn settings_path() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join("Library/Application Support/Clipz/settings.json"))
+}
+
+fn load_settings() -> Settings {
+    settings_path()
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn save_settings(settings: &Settings) -> Result<()> {
+    let path = settings_path().ok_or_else(|| anyhow!("HOME is not set"))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension("json.tmp");
+    std::fs::write(&temporary, serde_json::to_vec_pretty(settings)?)?;
+    std::fs::rename(temporary, path)?;
+    Ok(())
+}
+
+fn shortcut_label(shortcut: &str) -> String {
+    shortcut
+        .replace("super+", "⌘")
+        .replace("alt+", "⌥")
+        .replace("control+", "⌃")
+        .replace("shift+", "⇧")
+        .replace("Equal", "=")
+        .replace("Space", "Space")
+}
 
 #[cfg(target_os = "macos")]
 static mut STATUS_ITEM: *mut Object = std::ptr::null_mut();
@@ -331,6 +398,21 @@ fn type_label_for_type(et: &EntryType) -> &'static str {
     }
 }
 
+fn entry_matches_query(entry: &Entry, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+    query.is_empty()
+        || entry.content.to_lowercase().contains(&query)
+        || type_label_for_type(&entry.entry_type)
+            .to_lowercase()
+            .contains(&query)
+}
+
+fn reconciled_focus(current: Option<u64>, entries: &[Entry]) -> Option<u64> {
+    current
+        .filter(|id| entries.iter().any(|entry| entry.id == *id))
+        .or_else(|| entries.first().map(|entry| entry.id))
+}
+
 const TEXT_PRIMARY: u32 = 0xf7f4ee;
 const TEXT_SECONDARY: u32 = 0xd7d0c2;
 const TEXT_MUTED: u32 = 0xa69c89;
@@ -413,18 +495,22 @@ fn get_status_item_position() -> Option<Point<Pixels>> {
             return None;
         }
 
-        // macOS uses bottom-left origin; gpui uses top-left origin.
-        // Get screen height to convert.
         let screen: id = msg_send![button_window, screen];
-        let screen_frame: cocoa::foundation::NSRect = msg_send![screen, frame];
-        let screen_height = screen_frame.size.height;
+        let visible_frame: cocoa::foundation::NSRect = msg_send![screen, visibleFrame];
+        let main_screen: id = msg_send![class!(NSScreen), mainScreen];
+        let main_frame: cocoa::foundation::NSRect = msg_send![main_screen, frame];
 
-        // Get the button's window frame (in macOS bottom-left coords)
         let frame: cocoa::foundation::NSRect = msg_send![button_window, frame];
-
-        // Convert to top-left coords: the bottom of the status item = top of popover
-        let x = frame.origin.x + frame.size.width / 2.0 - 160.0; // center horizontally
-        let y = screen_height - frame.origin.y; // bottom of status item in top-left coords
+        let popover_width = 320.0;
+        let proposed_x = frame.origin.x + frame.size.width / 2.0 - popover_width / 2.0;
+        let x = proposed_x.clamp(
+            visible_frame.origin.x,
+            visible_frame.origin.x + visible_frame.size.width - popover_width,
+        );
+        // AppKit uses one global bottom-left coordinate space. gpui uses a global
+        // top-left space whose zero is the top of the primary display.
+        let primary_top = main_frame.origin.y + main_frame.size.height;
+        let y = primary_top - frame.origin.y;
 
         Some(point(px(x as f32), px(y as f32)))
     }
@@ -490,8 +576,10 @@ struct MenuBarPopover {
     entries: SharedEntries,
     backend_tx: BackendClient,
     supports_id_commands: Arc<AtomicBool>,
+    settings: Arc<Mutex<Settings>>,
     focus_handle: FocusHandle,
-    focused_index: Option<usize>,
+    focused_id: Option<u64>,
+    query: String,
     scroll_handle: ScrollHandle,
     _activation_sub: gpui::Subscription,
 }
@@ -507,6 +595,7 @@ impl MenuBarPopover {
         entries: SharedEntries,
         backend_tx: BackendClient,
         supports_id_commands: Arc<AtomicBool>,
+        settings: Arc<Mutex<Settings>>,
         window: &mut Window,
         cx: &mut GpuiContext<Self>,
     ) -> Self {
@@ -523,8 +612,10 @@ impl MenuBarPopover {
             entries,
             backend_tx,
             supports_id_commands,
+            settings,
             focus_handle,
-            focused_index: Some(0),
+            focused_id: None,
+            query: String::new(),
             scroll_handle: ScrollHandle::new(),
             _activation_sub: activation_sub,
         }
@@ -556,13 +647,91 @@ impl MenuBarPopover {
         }
     }
 
+    fn visible_entries(&self) -> Vec<Entry> {
+        self.entries
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry_matches_query(entry, &self.query))
+            .cloned()
+            .collect()
+    }
+
+    fn reconcile_focus(&mut self, entries: &[Entry]) {
+        self.focused_id = reconciled_focus(self.focused_id, entries);
+    }
+
+    fn move_focus(&mut self, delta: isize, cx: &mut GpuiContext<Self>) {
+        let entries = self.visible_entries();
+        self.reconcile_focus(&entries);
+        if entries.is_empty() {
+            return;
+        }
+        let current = self
+            .focused_id
+            .and_then(|id| entries.iter().position(|entry| entry.id == id))
+            .unwrap_or(0);
+        let next = (current as isize + delta).rem_euclid(entries.len() as isize) as usize;
+        self.focused_id = Some(entries[next].id);
+        self.scroll_handle.scroll_to_item(next);
+        cx.notify();
+    }
+
+    fn focused_entry(&self) -> Option<(usize, Entry)> {
+        self.visible_entries()
+            .into_iter()
+            .enumerate()
+            .find(|(_, entry)| Some(entry.id) == self.focused_id)
+    }
+
+    fn select_focused(&mut self, cx: &mut GpuiContext<Self>) {
+        if let Some((index, entry)) = self.focused_entry() {
+            self.select_entry(entry.id, index + 1);
+        }
+        cx.notify();
+    }
+
+    fn toggle_focused_pin(&mut self, cx: &mut GpuiContext<Self>) {
+        if let Some((index, entry)) = self.focused_entry() {
+            self.toggle_pin(entry.id, index + 1);
+        }
+        cx.notify();
+    }
+
+    fn delete_focused(&mut self, cx: &mut GpuiContext<Self>) {
+        if let Some((index, entry)) = self.focused_entry() {
+            if !entry.is_current {
+                self.remove_entry(entry.id, index + 1);
+            }
+        }
+        cx.notify();
+    }
+
+    fn cancel_or_close(&mut self, cx: &mut GpuiContext<Self>) {
+        if self.query.is_empty() {
+            POPOVER_SHOULD_CLOSE.store(true, Ordering::SeqCst);
+        } else {
+            self.query.clear();
+            let entries = self.visible_entries();
+            self.reconcile_focus(&entries);
+        }
+        cx.notify();
+    }
+
+    fn backspace_search(&mut self, cx: &mut GpuiContext<Self>) {
+        self.query.pop();
+        let entries = self.visible_entries();
+        self.reconcile_focus(&entries);
+        cx.notify();
+    }
+
     fn render_popover_entry(
         entry: &Entry,
         idx: usize,
-        focused_index: Option<usize>,
+        focused_id: Option<u64>,
         view_entity: gpui::Entity<Self>,
     ) -> impl IntoElement + 'static {
-        let is_focused = focused_index == Some(idx);
+        let is_focused = focused_id == Some(entry.id);
         let id = entry.id;
         let content = entry.content.clone();
         let entry_type = entry.entry_type.clone();
@@ -750,8 +919,6 @@ impl MenuBarPopover {
             .on_click(move |_, _, app| {
                 view.update(app, |this, cx| {
                     this.select_entry(id, legacy_index);
-                    // Signal to close popover after selecting
-                    MENU_BAR_CLICKED.store(true, Ordering::SeqCst);
                     cx.notify();
                 });
             })
@@ -760,35 +927,25 @@ impl MenuBarPopover {
 
 impl Render for MenuBarPopover {
     fn render(&mut self, window: &mut Window, cx: &mut GpuiContext<Self>) -> impl IntoElement {
-        let entries = self.entries.lock().unwrap().clone();
+        let all_entry_count = self.entries.lock().unwrap().len();
+        let entries = self.visible_entries();
+        self.reconcile_focus(&entries);
         let entry_count = entries.len();
         let view_entity = cx.entity();
-
-        if self.focused_index.is_none() && !entries.is_empty() {
-            self.focused_index = Some(0);
-        }
-        if let Some(idx) = self.focused_index {
-            if idx >= entries.len() {
-                self.focused_index = if entries.is_empty() {
-                    None
-                } else {
-                    Some(entries.len() - 1)
-                };
-            }
-        }
-        let focused_index = self.focused_index;
+        let focused_id = self.focused_id;
+        let query = self.query.clone();
+        let shortcut = shortcut_label(&self.settings.lock().unwrap().shortcut);
 
         let rendered_entries: Vec<_> = entries
             .iter()
             .enumerate()
             .map(|(idx, entry)| {
-                Self::render_popover_entry(entry, idx, focused_index, view_entity.clone())
+                Self::render_popover_entry(entry, idx, focused_id, view_entity.clone())
             })
             .collect();
 
         let view_clear = view_entity.clone();
-        let view_keyboard = view_entity.clone();
-        let entry_count_for_keys = entries.len();
+        let view_search = view_entity.clone();
         let error = self.backend_tx.0.lock().unwrap().error.clone();
         let restart_client = self.backend_tx.clone();
         let dismiss_client = self.backend_tx.clone();
@@ -806,60 +963,44 @@ impl Render for MenuBarPopover {
             .rounded_xl()
             .overflow_hidden()
             .text_color(rgb(TEXT_PRIMARY))
+            .on_action(cx.listener(|this, _: &FocusPrevious, _, cx| this.move_focus(-1, cx)))
+            .on_action(cx.listener(|this, _: &FocusNext, _, cx| this.move_focus(1, cx)))
+            .on_action(cx.listener(|this, _: &SelectFocused, _, cx| this.select_focused(cx)))
+            .on_action(cx.listener(|this, _: &ToggleFocusedPin, _, cx| this.toggle_focused_pin(cx)))
+            .on_action(cx.listener(|this, _: &DeleteFocused, _, cx| this.delete_focused(cx)))
+            .on_action(cx.listener(|this, _: &BackspaceSearch, _, cx| this.backspace_search(cx)))
+            .on_action(cx.listener(|this, _: &CancelOrClose, _, cx| this.cancel_or_close(cx)))
             .on_key_down(move |evt, _, app| {
-                view_keyboard.update(app, |this, cx| {
-                    let count = entry_count_for_keys;
-                    if count == 0 {
-                        return;
-                    }
-                    let key_str = format!("{:?}", evt.keystroke.key).to_lowercase();
-                    match key_str.as_str() {
-                        "\"up\"" | "\"arrowup\"" | "up" | "arrowup" => {
-                            let new_idx = if let Some(idx) = this.focused_index {
-                                if idx > 0 {
-                                    idx - 1
-                                } else {
-                                    count - 1
-                                }
-                            } else {
-                                0
-                            };
-                            this.focused_index = Some(new_idx);
-                            this.scroll_handle.scroll_to_item(new_idx);
-                            cx.notify();
-                        }
-                        "\"down\"" | "\"arrowdown\"" | "down" | "arrowdown" => {
-                            let new_idx = if let Some(idx) = this.focused_index {
-                                if idx < count - 1 {
-                                    idx + 1
-                                } else {
-                                    0
-                                }
-                            } else {
-                                0
-                            };
-                            this.focused_index = Some(new_idx);
-                            this.scroll_handle.scroll_to_item(new_idx);
-                            cx.notify();
-                        }
-                        "\"enter\"" | "enter" | "\"return\"" | "return" => {
-                            if let Some(idx) = this.focused_index {
-                                let entries = this.entries.lock().unwrap().clone();
-                                if let Some(entry) = entries.get(idx) {
-                                    this.select_entry(entry.id, idx + 1);
-                                    MENU_BAR_CLICKED.store(true, Ordering::SeqCst);
-                                }
-                            }
-                            cx.notify();
-                        }
-                        "\"escape\"" | "escape" => {
-                            MENU_BAR_CLICKED.store(true, Ordering::SeqCst);
-                            cx.notify();
-                        }
-                        _ => {}
-                    }
-                });
+                if let Some(key) = evt
+                    .keystroke
+                    .key_char
+                    .as_deref()
+                    .filter(|key| key.chars().count() == 1)
+                {
+                    view_search.update(app, |this, cx| {
+                        this.query.push_str(key);
+                        let entries = this.visible_entries();
+                        this.reconcile_focus(&entries);
+                        cx.notify();
+                    });
+                }
             })
+            .child(
+                div()
+                    .mx_3()
+                    .mt_3()
+                    .px_3()
+                    .py_2()
+                    .rounded_lg()
+                    .bg(rgba(SURFACE_ICON_WELL))
+                    .text_xs()
+                    .text_color(if query.is_empty() {
+                        rgb(TEXT_MUTED)
+                    } else {
+                        rgb(TEXT_PRIMARY)
+                    })
+                    .child(format!("⌕  {query}")),
+            )
             .when_some(error, |el, error| {
                 el.child(
                     div()
@@ -917,7 +1058,11 @@ impl Render for MenuBarPopover {
                         div()
                             .text_size(px(10.0))
                             .text_color(rgb(TEXT_SECONDARY))
-                            .child(format!("{} items", entry_count)),
+                            .child(if query.is_empty() {
+                                format!("{} items", all_entry_count)
+                            } else {
+                                format!("{} of {} items", entry_count, all_entry_count)
+                            }),
                     )
                     .child(
                         div()
@@ -943,6 +1088,17 @@ impl Render for MenuBarPopover {
                                             let _ = this.backend_tx.send("get-entries".into());
                                             cx.notify();
                                         });
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .id("change-shortcut")
+                                    .cursor_pointer()
+                                    .text_size(px(10.0))
+                                    .text_color(rgb(TEXT_DIM))
+                                    .child(format!("{shortcut} Open · click to change"))
+                                    .on_click(|_, _, _| {
+                                        CHANGE_SHORTCUT.store(true, Ordering::SeqCst);
                                     }),
                             )
                             .child({
@@ -977,12 +1133,62 @@ struct AppState {
     quitting: bool,
     shared_entries: SharedEntries,
     supports_id_commands: Arc<AtomicBool>,
-    _hotkey_manager: GlobalHotKeyManager,
+    hotkey_manager: Option<GlobalHotKeyManager>,
+    hotkey: Option<HotKey>,
+    settings: Arc<Mutex<Settings>>,
     hotkey_rx: Receiver<()>,
     popover_handle: Option<WindowHandle<MenuBarPopover>>,
 }
 
 impl AppState {
+    fn cycle_shortcut(&mut self) {
+        const SHORTCUTS: [&str; 3] = ["super+alt+Equal", "super+shift+KeyV", "control+shift+Space"];
+        let current = SHORTCUTS
+            .iter()
+            .position(|shortcut| *shortcut == self.settings.lock().unwrap().shortcut)
+            .unwrap_or(0);
+        let candidate = SHORTCUTS[(current + 1) % SHORTCUTS.len()];
+        let Ok(hotkey) = candidate.parse::<HotKey>() else {
+            return;
+        };
+        let Some(manager) = &self.hotkey_manager else {
+            return;
+        };
+        if let Err(error) = manager.register(hotkey) {
+            self.backend_client.record_error(
+                ErrorSource::General,
+                format!(
+                    "Shortcut {} is unavailable: {error}",
+                    shortcut_label(candidate)
+                ),
+            );
+            return;
+        }
+        if let Some(old) = self.hotkey.replace(hotkey) {
+            let _ = manager.unregister(old);
+        }
+        self.settings.lock().unwrap().shortcut = candidate.into();
+        if let Err(error) = save_settings(&self.settings.lock().unwrap()) {
+            self.backend_client.record_error(
+                ErrorSource::General,
+                format!("Could not save shortcut setting: {error}"),
+            );
+        }
+    }
+
+    fn close_popover(&mut self, cx: &mut App) {
+        if let Some(handle) = self.popover_handle.take() {
+            let _ = handle.update(cx, |_, window, _| window.remove_window());
+        }
+    }
+
+    fn open_popover(&mut self, cx: &mut App) {
+        if self.popover_handle.is_some() {
+            return;
+        }
+        self.create_popover(cx);
+    }
+
     fn poll_lifecycle(&mut self, cx: &mut App) {
         let (restart, quit) = {
             let mut state = self.backend_client.0.lock().unwrap();
@@ -1049,14 +1255,7 @@ impl AppState {
         }
     }
 
-    fn toggle_popover(&mut self, cx: &mut App) {
-        if let Some(handle) = self.popover_handle.take() {
-            let _ = handle.update(cx, |_, window, _| {
-                window.remove_window();
-            });
-            return;
-        }
-
+    fn create_popover(&mut self, cx: &mut App) {
         let pos = get_status_item_position();
         let popover_width = 320.0_f32;
         let popover_height = 400.0_f32;
@@ -1073,6 +1272,7 @@ impl AppState {
         let shared = self.shared_entries.clone();
         let backend_tx = self.backend_client.clone();
         let supports_id_commands = self.supports_id_commands.clone();
+        let settings = self.settings.clone();
 
         {
             let handle = cx
@@ -1095,6 +1295,7 @@ impl AppState {
                                 shared,
                                 backend_tx,
                                 supports_id_commands,
+                                settings,
                                 window,
                                 cx,
                             )
@@ -1104,6 +1305,14 @@ impl AppState {
                 .ok();
 
             self.popover_handle = handle;
+        }
+    }
+
+    fn toggle_popover(&mut self, cx: &mut App) {
+        if self.popover_handle.is_some() {
+            self.close_popover(cx);
+        } else {
+            self.open_popover(cx);
         }
     }
 
@@ -1122,6 +1331,7 @@ impl AppState {
                         self.backend_client
                             .clear_resolved_error(ErrorSource::Restore);
                         let _ = self.backend_client.send("get-entries".into());
+                        POPOVER_SHOULD_CLOSE.store(true, Ordering::SeqCst);
                         entries_changed = true;
                     }
                     BackendMessage::RemoveSuccess
@@ -1182,6 +1392,10 @@ fn start_poll_loop(app_state: Entity<AppState>, cx: &mut App) {
                             state.toggle_popover(cx);
                             needs_notify = true;
                         }
+                        if CHANGE_SHORTCUT.swap(false, Ordering::SeqCst) {
+                            state.cycle_shortcut();
+                            needs_notify = true;
+                        }
 
                         if state.poll_backend() {
                             needs_notify = true;
@@ -1192,14 +1406,14 @@ fn start_poll_loop(app_state: Entity<AppState>, cx: &mut App) {
                             state.toggle_popover(cx);
                             needs_notify = true;
                         }
+                        if POPOVER_SHOULD_OPEN.swap(false, Ordering::SeqCst) {
+                            state.open_popover(cx);
+                            needs_notify = true;
+                        }
 
                         // Close popover if it lost focus
                         if POPOVER_SHOULD_CLOSE.swap(false, Ordering::SeqCst) {
-                            if let Some(handle) = state.popover_handle.take() {
-                                let _ = handle.update(cx, |_, window, _| {
-                                    window.remove_window();
-                                });
-                            }
+                            state.close_popover(cx);
                         }
 
                         // Also covers errors/dismissals produced by popover actions.
@@ -1211,7 +1425,7 @@ fn start_poll_loop(app_state: Entity<AppState>, cx: &mut App) {
                             && state.lifecycle_rx.is_none()
                             && !state.quitting
                         {
-                            state.toggle_popover(cx);
+                            state.open_popover(cx);
                         }
                         last_error = error;
                         if needs_notify {
@@ -1257,13 +1471,32 @@ fn main() {
         .run(|cx: &mut App| {
             set_activation_policy_accessory();
             setup_menu_bar_icon();
+            cx.bind_keys([
+                KeyBinding::new("up", FocusPrevious, None),
+                KeyBinding::new("down", FocusNext, None),
+                KeyBinding::new("enter", SelectFocused, None),
+                KeyBinding::new("cmd-p", ToggleFocusedPin, None),
+                KeyBinding::new("backspace", BackspaceSearch, None),
+                KeyBinding::new("cmd-backspace", DeleteFocused, None),
+                KeyBinding::new("escape", CancelOrClose, None),
+            ]);
 
-            let hotkey_manager =
-                GlobalHotKeyManager::new().expect("failed to create hotkey manager");
-            let hotkey = HotKey::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::Equal);
-            hotkey_manager
-                .register(hotkey)
-                .expect("failed to register hotkey");
+            let settings = Arc::new(Mutex::new(load_settings()));
+            let configured_hotkey = settings
+                .lock()
+                .unwrap()
+                .shortcut
+                .parse::<HotKey>()
+                .unwrap_or_else(|_| {
+                    HotKey::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::Equal)
+                });
+            let hotkey_manager = GlobalHotKeyManager::new().ok();
+            let hotkey = hotkey_manager.as_ref().and_then(|manager| {
+                manager
+                    .register(configured_hotkey)
+                    .ok()
+                    .map(|_| configured_hotkey)
+            });
 
             let (hotkey_tx, hotkey_rx) = mpsc::channel::<()>();
             thread::spawn(move || {
@@ -1280,6 +1513,15 @@ fn main() {
             let shared_entries: SharedEntries = Arc::new(Mutex::new(Vec::new()));
             let supports_id_commands = Arc::new(AtomicBool::new(false));
             let backend_client = BackendClient::default();
+            if hotkey.is_none() {
+                backend_client.record_error(
+                    ErrorSource::General,
+                    format!(
+                        "Shortcut {} is unavailable. Click the shortcut hint to choose another.",
+                        shortcut_label(&settings.lock().unwrap().shortcut)
+                    ),
+                );
+            }
             let backend = match BackendHandle::start() {
                 Ok(backend) => {
                     backend_client.0.lock().unwrap().tx = Some(backend.tx.clone());
@@ -1299,7 +1541,9 @@ fn main() {
                 quitting: false,
                 shared_entries,
                 supports_id_commands,
-                _hotkey_manager: hotkey_manager,
+                hotkey_manager,
+                hotkey,
+                settings,
                 hotkey_rx,
                 popover_handle: None,
             });
@@ -1311,6 +1555,44 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn entry(id: u64, content: &str, entry_type: EntryType) -> Entry {
+        Entry {
+            id,
+            content: content.into(),
+            timestamp: 0,
+            entry_type,
+            is_current: false,
+            pinned: false,
+        }
+    }
+
+    #[test]
+    fn search_matches_content_and_type_case_insensitively() {
+        let url = entry(1, "https://example.com/Docs", EntryType::Url);
+        assert!(entry_matches_query(&url, "DOCS"));
+        assert!(entry_matches_query(&url, "url"));
+        assert!(!entry_matches_query(&url, "image"));
+        assert!(entry_matches_query(&url, ""));
+    }
+
+    #[test]
+    fn shortcut_labels_match_registered_shortcuts() {
+        assert_eq!(shortcut_label("super+alt+Equal"), "⌘⌥=");
+        assert_eq!(shortcut_label("control+shift+Space"), "⌃⇧Space");
+    }
+
+    #[test]
+    fn focus_tracks_stable_id_across_reordering_and_falls_back_when_removed() {
+        let first = entry(1, "first", EntryType::Text);
+        let focused = entry(2, "focused", EntryType::Text);
+        assert_eq!(
+            reconciled_focus(Some(2), &[focused.clone(), first.clone()]),
+            Some(2)
+        );
+        assert_eq!(reconciled_focus(Some(2), &[first]), Some(1));
+        assert_eq!(reconciled_focus(Some(2), &[]), None);
+    }
 
     #[test]
     fn errors_are_not_unknown_messages() {
