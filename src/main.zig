@@ -129,31 +129,57 @@ fn errorMessage(err: anyerror) []const u8 {
         error.ContentTooLarge => "Clipboard content is too large to store.",
         error.FileNotFound => "The clipboard file or image is missing and could not be restored.",
         error.NoClipboardContent => "No supported clipboard content is available.",
+        error.ClipboardPermissionDenied => "macOS denied clipboard access. Check Privacy & Security permissions for Clipz or your terminal.",
+        error.ClipboardCoercionFailed => "macOS could not convert the clipboard data to the requested type (AppleScript -1700).",
+        error.CommandFailed => "The macOS clipboard command failed. The terminal log includes the AppleScript error code.",
+        error.AccessDenied => "Access to the file was denied. Check its permissions and macOS Privacy & Security settings.",
         else => "Clipboard operation failed. Check that the file or image still exists and try again.",
     };
 }
 
-fn sendError(stdout: std.fs.File, err: anyerror) !void {
+const ErrorSource = enum { capture, restore, persistence, recovery };
+
+fn backgroundErrorSource(err: anyerror) ErrorSource {
+    return switch (err) {
+        error.HistorySaveFailed => .persistence,
+        error.CorruptHistoryRecovered => .recovery,
+        else => .capture,
+    };
+}
+
+fn sendError(stdout: std.fs.File, err: anyerror, source: ErrorSource) !void {
     // Messages are fixed literals, never clipboard content or unescaped OS text.
-    try stdout.writeAll("{\"type\":\"error\",\"message\":\"");
+    try stdout.writeAll("{\"type\":\"error\",\"source\":\"");
+    try stdout.writeAll(@tagName(source));
+    try stdout.writeAll("\",\"message\":\"");
+    try stdout.writeAll(switch (source) {
+        .capture => "Could not capture the clipboard. ",
+        .restore => "Could not copy the selected entry. ",
+        else => "",
+    });
     try stdout.writeAll(errorMessage(err));
     try stdout.writeAll("\"}\n");
 }
 
 fn sendErrorCallback(_: *manager.ClipboardManager, err: anyerror) void {
-    sendError(std.fs.File.stdout(), err) catch {};
+    sendError(std.fs.File.stdout(), err, backgroundErrorSource(err)) catch {};
+}
+
+fn sendCaptureRecoveredCallback(_: *manager.ClipboardManager) void {
+    std.fs.File.stdout().writeAll("{\"type\":\"error-resolved\",\"source\":\"capture\"}\n") catch {};
 }
 
 fn runJsonApi(allocator: std.mem.Allocator, clipboard_manager: *manager.ClipboardManager) !void {
     clipboard_manager.entries_changed_callback = sendEntriesCallback;
     clipboard_manager.error_callback = sendErrorCallback;
+    clipboard_manager.capture_recovered_callback = sendCaptureRecoveredCallback;
 
     const stdin = std.fs.File.stdin();
     const stdout = std.fs.File.stdout();
 
     // Ready must be the first frame, before the monitor can write to stdout.
     try stdout.writeAll("{\"type\":\"ready\",\"supportsIdCommands\":true}\n");
-    if (clipboard_manager.takePendingError()) |err| try sendError(stdout, err);
+    if (clipboard_manager.takePendingError()) |err| try sendError(stdout, err, backgroundErrorSource(err));
     try clipboard_manager.startMonitoring();
     defer clipboard_manager.stopMonitoring();
 
@@ -180,7 +206,7 @@ fn runJsonApi(allocator: std.mem.Allocator, clipboard_manager: *manager.Clipboar
                     clipboard_manager.selectEntryById(entry_id) catch |err| {
                         clipboard_manager.stdout_mutex.lock();
                         defer clipboard_manager.stdout_mutex.unlock();
-                        try sendError(stdout, err);
+                        try sendError(stdout, err, .restore);
                         continue;
                     };
                     clipboard_manager.stdout_mutex.lock();
@@ -198,7 +224,7 @@ fn runJsonApi(allocator: std.mem.Allocator, clipboard_manager: *manager.Clipboar
                     clipboard_manager.selectEntry(index) catch |err| {
                         clipboard_manager.stdout_mutex.lock();
                         defer clipboard_manager.stdout_mutex.unlock();
-                        try sendError(stdout, err);
+                        try sendError(stdout, err, .restore);
                         continue;
                     };
                     clipboard_manager.stdout_mutex.lock();
@@ -321,7 +347,7 @@ fn appendJsonEscapedString(allocator: std.mem.Allocator, output: *std.ArrayList(
 }
 
 fn sendClipboardEntries(allocator: std.mem.Allocator, stdout: std.fs.File, clipboard_manager: *manager.ClipboardManager) !void {
-    if (clipboard_manager.takePendingError()) |err| try sendError(stdout, err);
+    if (clipboard_manager.takePendingError()) |err| try sendError(stdout, err, backgroundErrorSource(err));
     var snapshot = try clipboard_manager.snapshotDisplayEntries(allocator);
     defer manager.ClipboardManager.freeDisplayEntriesSnapshot(allocator, &snapshot);
 

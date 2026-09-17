@@ -97,6 +97,7 @@ pub const ClipboardManager = struct {
     // Callback for notifying when entries change (for JSON API)
     entries_changed_callback: ?*const fn (*ClipboardManager) void = null,
     error_callback: ?*const fn (*ClipboardManager, anyerror) void = null,
+    capture_recovered_callback: ?*const fn (*ClipboardManager) void = null,
     // Mutex for thread-safe stdout writes (used in JSON API mode)
     stdout_mutex: std.Thread.Mutex = .{},
 
@@ -529,6 +530,7 @@ pub const ClipboardManager = struct {
     fn monitorThread(self: *ClipboardManager) void {
         var state = CaptureState{};
         while (self.should_monitor.load(.acquire)) {
+            const was_failing = state.failures != 0;
             self.captureOnce(&state) catch |err| {
                 const revision = self.clipboard_access.revision(self.clipboard_access.context);
                 if (state.failures == 0 or state.failed_revision != revision) {
@@ -538,6 +540,13 @@ pub const ClipboardManager = struct {
                 state.failed_revision = revision;
                 state.failures = @min(state.failures + 1, 20);
             };
+            if (was_failing and state.failures == 0) {
+                if (self.capture_recovered_callback) |callback| {
+                    self.stdout_mutex.lock();
+                    defer self.stdout_mutex.unlock();
+                    callback(self);
+                }
+            }
             // Check the save deadline even when the clipboard is idle or failing.
             self.trySavePersistence();
             self.notifyPendingError();

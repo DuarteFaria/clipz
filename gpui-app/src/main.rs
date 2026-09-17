@@ -64,7 +64,13 @@ enum BackendMessage {
     #[serde(rename = "success")]
     Success,
     #[serde(rename = "error")]
-    Error { message: String },
+    Error {
+        message: String,
+        #[serde(default)]
+        source: ErrorSource,
+    },
+    #[serde(rename = "error-resolved")]
+    ErrorResolved { source: ErrorSource },
     #[serde(skip)]
     TransportError { message: String },
     #[serde(rename = "ready")]
@@ -75,6 +81,18 @@ enum BackendMessage {
     },
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum ErrorSource {
+    Capture,
+    Restore,
+    Persistence,
+    Recovery,
+    #[default]
+    #[serde(other)]
+    General,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -193,6 +211,7 @@ fn pump_messages(stdout: impl std::io::Read + Send + 'static, tx: Sender<Backend
                 let msg = serde_json::from_str::<BackendMessage>(&line).unwrap_or_else(|e| {
                     BackendMessage::Error {
                         message: format!("Invalid backend response: {e}"),
+                        source: ErrorSource::General,
                     }
                 });
                 if tx.send(msg).is_err() {
@@ -430,6 +449,7 @@ struct BackendClient(Arc<Mutex<ConnectionState>>);
 struct ConnectionState {
     tx: Option<Sender<String>>,
     error: Option<String>,
+    error_source: ErrorSource,
     restart_requested: bool,
     quit_requested: bool,
 }
@@ -442,7 +462,25 @@ impl BackendClient {
         }
         state.tx = None;
         state.error = Some("Backend unavailable. Restart to reconnect.".into());
+        state.error_source = ErrorSource::General;
         Err(BackendError::SendFailed.into())
+    }
+
+    fn record_error(&self, source: ErrorSource, message: String) {
+        let mut state = self.0.lock().unwrap();
+        state.error = Some(message);
+        state.error_source = source;
+    }
+
+    fn clear_resolved_error(&self, source: ErrorSource) {
+        if !matches!(source, ErrorSource::Capture | ErrorSource::Restore) {
+            return;
+        }
+        let mut state = self.0.lock().unwrap();
+        if state.error_source == source {
+            state.error = None;
+            state.error_source = ErrorSource::General;
+        }
     }
 }
 
@@ -960,6 +998,7 @@ impl AppState {
             self.shared_entries.lock().unwrap().clear();
             let mut state = self.backend_client.0.lock().unwrap();
             state.tx = None;
+            state.error_source = ErrorSource::General;
             state.error = Some(if self.quitting {
                 "Shutting down backend…".into()
             } else {
@@ -1001,8 +1040,10 @@ impl AppState {
                     self.backend = Some(backend);
                 }
                 Err(error) => {
-                    self.backend_client.0.lock().unwrap().error =
-                        Some(format!("Could not start backend: {error:#}"));
+                    self.backend_client.record_error(
+                        ErrorSource::General,
+                        format!("Could not start backend: {error:#}"),
+                    );
                 }
             }
         }
@@ -1077,8 +1118,13 @@ impl AppState {
                         }
                         entries_changed = true;
                     }
-                    BackendMessage::SelectSuccess
-                    | BackendMessage::RemoveSuccess
+                    BackendMessage::SelectSuccess => {
+                        self.backend_client
+                            .clear_resolved_error(ErrorSource::Restore);
+                        let _ = self.backend_client.send("get-entries".into());
+                        entries_changed = true;
+                    }
+                    BackendMessage::RemoveSuccess
                     | BackendMessage::PinToggled
                     | BackendMessage::Success => {
                         let _ = self.backend_client.send("get-entries".into());
@@ -1090,15 +1136,23 @@ impl AppState {
                             .store(supports_id_commands, Ordering::Release);
                         let _ = self.backend_client.send("get-entries".into());
                     }
-                    BackendMessage::Error { message } => {
-                        self.backend_client.0.lock().unwrap().error = Some(message);
+                    BackendMessage::Error { message, source } => {
+                        self.backend_client.record_error(source, message);
+                        entries_changed = true;
+                    }
+                    BackendMessage::ErrorResolved { source } => {
+                        self.backend_client.clear_resolved_error(source);
                         entries_changed = true;
                     }
                     BackendMessage::TransportError { message } => {
                         let mut state = self.backend_client.0.lock().unwrap();
                         state.tx = None;
                         // Keep the specific failure if EOF follows an error response.
-                        state.error.get_or_insert(message);
+                        if state.error.is_none() {
+                            state.error = Some(message);
+                        }
+                        // A late success must not dismiss a disconnected state.
+                        state.error_source = ErrorSource::General;
                         self.supports_id_commands.store(false, Ordering::Release);
                         entries_changed = true;
                     }
@@ -1262,9 +1316,60 @@ mod tests {
     fn errors_are_not_unknown_messages() {
         let message: BackendMessage =
             serde_json::from_str(r#"{"type":"error","message":"save failed"}"#).unwrap();
-        assert!(matches!(message, BackendMessage::Error { message } if message == "save failed"));
+        assert!(
+            matches!(message, BackendMessage::Error { message, source: ErrorSource::General } if message == "save failed")
+        );
         let message: BackendMessage = serde_json::from_str(r#"{"type":"future-message"}"#).unwrap();
         assert!(matches!(message, BackendMessage::Unknown));
+    }
+
+    #[test]
+    fn successful_retry_clears_only_the_matching_clipboard_warning() {
+        let client = BackendClient::default();
+        client.record_error(ErrorSource::Capture, "capture failed".into());
+        client.clear_resolved_error(ErrorSource::Restore);
+        assert!(client.0.lock().unwrap().error.is_some());
+        client.clear_resolved_error(ErrorSource::Capture);
+        assert!(client.0.lock().unwrap().error.is_none());
+
+        client.record_error(ErrorSource::Restore, "restore failed".into());
+        client.clear_resolved_error(ErrorSource::Restore);
+        assert!(client.0.lock().unwrap().error.is_none());
+        for source in [
+            ErrorSource::Persistence,
+            ErrorSource::Recovery,
+            ErrorSource::General,
+        ] {
+            client.record_error(source, "important warning".into());
+            client.clear_resolved_error(ErrorSource::Capture);
+            client.clear_resolved_error(ErrorSource::Restore);
+            assert_eq!(
+                client.0.lock().unwrap().error.as_deref(),
+                Some("important warning")
+            );
+        }
+    }
+
+    #[test]
+    fn protocol_identifies_capture_and_restore_failures_and_capture_recovery() {
+        let message: BackendMessage =
+            serde_json::from_str(r#"{"type":"error","source":"restore","message":"missing file"}"#)
+                .unwrap();
+        assert!(matches!(
+            message,
+            BackendMessage::Error {
+                source: ErrorSource::Restore,
+                ..
+            }
+        ));
+        let message: BackendMessage =
+            serde_json::from_str(r#"{"type":"error-resolved","source":"capture"}"#).unwrap();
+        assert!(matches!(
+            message,
+            BackendMessage::ErrorResolved {
+                source: ErrorSource::Capture
+            }
+        ));
     }
 
     #[test]

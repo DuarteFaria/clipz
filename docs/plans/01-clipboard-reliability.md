@@ -47,7 +47,7 @@ Clipz captures, restores, and retains the right content, and makes failures visi
 - [x] Clipboard restoration failures are reported accurately.
 - [x] Backend failure is surfaced with Restart backend and Dismiss actions.
 - [x] Pending history is flushed by the normal shutdown path.
-- [ ] CI actually executes the regression tests.
+- [x] CI actually executes the regression tests.
 - [x] Architecture and protocol documentation reflect the implementation.
 
 ## Implementation decisions
@@ -65,9 +65,9 @@ Clipz captures, restores, and retains the right content, and makes failures visi
 
 ## Local verification
 
-- `zig build test --summary all`: 26 tests passed.
-- `python3 scripts/test-json-api.py`: 6 tests passed.
-- `cargo test --locked -p clipz-gpui`: 12 tests passed.
+- `zig build test --summary all`: 28 tests passed.
+- `python3 scripts/test-json-api.py`: 8 tests passed.
+- `cargo test --locked -p clipz-gpui`: 14 tests passed.
 - `zig build` and `cargo build --locked -p clipz-gpui`: passed.
 - Zig/Rust formatting and `git diff --check`: passed.
 - Five AppleScript templates compiled with `osacompile` without execution.
@@ -76,6 +76,12 @@ Tests use injected clipboards, isolated history/image directories, and fake
 processes. The protocol harness runs the real backend with fake AppleScript I/O
 and verifies startup capture, failure frames, corrupt-history recovery, pending
 shutdown saves, and image persistence/deduplication across restart.
+
+File-selection follow-up: capture now recognizes both Finder file URLs and the
+AppleScript alias representation written by file restoration. Protocol errors
+identify capture versus restore, and successful retries clear only the matching
+transient warning. Tests cover restored-alias recapture and capture recovery;
+the reported real Finder workflow still needs a user recheck.
 
 ## Manual macOS checks still required
 

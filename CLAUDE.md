@@ -53,6 +53,10 @@ The gpui frontend spawns `clipz --json-api --low-power` and communicates over st
 - `{"type":"pin-toggled","id":N,"pinned":true}`
 - Legacy command responses use `index` instead of `id`.
 - `{"type":"success","message":"..."}` / `{"type":"error","message":"..."}`
+- Capture, restore, persistence, and recovery errors also include `source`.
+- `{"type":"error-resolved","source":"capture"}` — a failed capture recovered;
+  clear only the corresponding capture warning. `select-success` resolves a
+  restore warning, not unrelated persistence/recovery errors.
 
 IDs are stable across promotion, pinning, and reload. `isCurrent` is explicit and
 is not inferred from the ID or display position. It is unknown until startup
@@ -75,7 +79,8 @@ stdout mutex. Diagnostics belong on stderr, never on the protocol stream.
 - `command.zig` — CLI command parsing
 
 ### Clipboard Type Handling
-Capture inspects advertised clipboard representations: file URL, PNG/JPEG/TIFF,
+Capture inspects advertised clipboard representations: file URL or AppleScript
+alias (including Clipz-restored files), PNG/JPEG/TIFF,
 then text (classified further as URL/color). Images are copied to durable storage.
 The stored type is authoritative during restoration. Failed asset reads and
 oversized content are errors, not placeholder entries.
@@ -92,7 +97,9 @@ oversized content are errors, not placeholder entries.
 1. `ClipboardManager::monitorThread` captures on startup, then reads only changed pasteboard revisions; failed reads retry without acknowledgment
 2. `addEntry` promotes duplicates, enforces `max_entries` for unpinned history (default 10), schedules a save, and notifies
 3. `entries_changed_callback` in JSON API mode serialises and writes entries to stdout
-4. The frontend updates shared entries and calls `cx.notify()` to re-render; errors remain visible until dismissed or restarted
+4. The frontend updates shared entries and calls `cx.notify()` to re-render;
+   capture/restore errors clear when that operation recovers. Other errors remain
+   visible until dismissed or restarted.
 
 ### Persistence
 History uses `~/.clipz_history.json` v4 (`version`, `next_id`, `entries[]` with

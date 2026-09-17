@@ -33,16 +33,33 @@ class JsonApiTests(unittest.TestCase):
             "#!/usr/bin/env python3\n"
             "import os, pathlib, sys\n"
             "script = sys.argv[2]\n"
+            "home = pathlib.Path(os.environ['HOME'])\n"
+            "restored = home / 'alias-restored'\n"
             "if 'clipboard info' in script:\n"
-            "    print(os.environ.get('CLIPZ_TEST_FORMAT', 'text'))\n"
+            "    if (home / 'fail-capture').exists():\n"
+            "        sys.exit(1)\n"
+            "    fmt = os.environ.get('CLIPZ_TEST_FORMAT', 'text')\n"
+            "    if fmt == 'file' and restored.exists():\n"
+            "        fmt = 'alias' if 'clipboard info for alias' in script else 'text'\n"
+            "    print(fmt)\n"
+            "elif 'return POSIX path of (get the clipboard as alias)' in script:\n"
+            "    print(home / 'teachers.csv')\n"
+            "elif 'return POSIX path of (get the clipboard as «class furl»)' in script:\n"
+            "    if restored.exists():\n"
+            "        sys.exit(1)\n"
+            "    print(home / 'teachers.csv')\n"
             "elif 'on run argv' in script:\n"
             "    signatures = {'PNG': b'\\x89PNG\\r\\n\\x1a\\n',"
             " 'JPEG': b'\\xff\\xd8\\xff', 'TIFF': b'II\\x2a\\x00'}\n"
             "    pathlib.Path(sys.argv[3]).write_bytes(signatures[sys.argv[4]] + b'test image')\n"
             "    print('success')\n"
             "elif 'return \"success\"' in script:\n"
+            "    if 'as alias)' in script:\n"
+            "        restored.touch()\n"
             "    print('success')\n"
             "else:\n"
+            "    if restored.exists():\n"
+            "        sys.exit(1)\n"
             "    print('captured-on-startup')\n"
         )
         fake.chmod(0o700)
@@ -139,7 +156,42 @@ class JsonApiTests(unittest.TestCase):
         self.send("select-entry-id:1")
         failure = self.wait_for(lambda m: m["type"] in ("error", "select-success"))
         self.assertEqual(failure["type"], "error")
+        self.assertEqual(failure["source"], "restore")
         self.assertIn("missing", failure["message"])
+        self.quit()
+
+    def test_file_selection_is_recaptured_as_alias_without_false_error(self):
+        (self.home / "teachers.csv").write_text("test file\n")
+        self.start("file")
+        first = self.wait_for(lambda m: m["type"] in ("entries", "error"))
+        self.assertEqual(first["type"], "entries")
+        entry = first["data"][0]
+        self.assertEqual(entry["type"], "file")
+        self.send(f"select-entry-id:{entry['id']}")
+        selected = self.wait_for(lambda m: m["type"] in ("select-success", "error"))
+        self.assertEqual(selected["type"], "select-success")
+        self.quit()
+
+        # The restored clipboard advertises alias, not Finder's file URL.
+        self.start("file")
+        recaptured = self.wait_for(lambda m: m["type"] in ("entries", "error"))
+        self.assertEqual(recaptured["type"], "entries")
+        self.assertEqual(len(recaptured["data"]), 1)
+        self.assertEqual(recaptured["data"][0]["id"], entry["id"])
+        self.assertTrue(recaptured["data"][0]["isCurrent"])
+        self.quit()
+
+    def test_capture_warning_resolves_after_successful_retry(self):
+        failure_flag = self.home / "fail-capture"
+        failure_flag.touch()
+        self.start()
+        failure = self.wait_for(lambda m: m["type"] == "error")
+        self.assertEqual(failure["source"], "capture")
+        self.assertIn("capture", failure["message"])
+        failure_flag.unlink()
+        recovered = self.wait_for(lambda m: m["type"] == "error-resolved")
+        self.assertEqual(recovered["source"], "capture")
+        self.assertTrue(any(m["type"] == "entries" for m in self.messages))
         self.quit()
 
     def test_corrupt_history_is_preserved_and_reported(self):

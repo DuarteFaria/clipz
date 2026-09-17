@@ -5,6 +5,8 @@ const image_storage = @import("image_storage.zig");
 
 pub const ClipboardError = error{
     CommandFailed,
+    ClipboardPermissionDenied,
+    ClipboardCoercionFailed,
     NoClipboardContent,
     ContentTooLarge,
     InvalidPath,
@@ -36,6 +38,25 @@ fn checkRestoreResult(term: std.process.Child.Term, output: []const u8) Clipboar
     if (!std.mem.eql(u8, scriptValue(output), "success")) return error.CommandFailed;
 }
 
+fn scriptErrorNumber(stderr: []const u8) ?i32 {
+    const message = std.mem.trim(u8, stderr, " \t\r\n");
+    if (!std.mem.endsWith(u8, message, ")")) return null;
+    const start = std.mem.lastIndexOfScalar(u8, message, '(') orelse return null;
+    return std.fmt.parseInt(i32, message[start + 1 .. message.len - 1], 10) catch null;
+}
+
+fn scriptFailure(operation: []const u8, stderr: []const u8) ClipboardError {
+    // AppleScript diagnostics can echo clipboard contents. Log only the numeric
+    // error code, never arbitrary script text, paths, or clipboard data.
+    const code = scriptErrorNumber(stderr);
+    std.debug.print("Clipz: clipboard {s} failed (AppleScript error {any}).\n", .{ operation, code });
+    return switch (code orelse 0) {
+        -1743, -10004 => error.ClipboardPermissionDenied,
+        -1700 => error.ClipboardCoercionFailed,
+        else => error.CommandFailed,
+    };
+}
+
 fn runScript(allocator: std.mem.Allocator, script: []const u8, max_output_bytes: usize) ![]u8 {
     const result = std.process.Child.run(.{
         .allocator = allocator,
@@ -47,7 +68,7 @@ fn runScript(allocator: std.mem.Allocator, script: []const u8, max_output_bytes:
     };
     defer allocator.free(result.stderr);
     errdefer allocator.free(result.stdout);
-    try checkExit(result.term);
+    checkExit(result.term) catch return scriptFailure("read", result.stderr);
     return result.stdout;
 }
 
@@ -59,10 +80,12 @@ pub fn getContentWithConfig(allocator: std.mem.Allocator, cfg: config.Config) !C
     if (builtin.os.tag != .macos) return error.UnsupportedPlatform;
 
     // Inspect advertised representations instead of coercing arbitrary text to
-    // a file URL. Failed reads of an advertised type must remain capture errors.
+    // a file URL. Finder supplies file URLs; AppleScript restoration can supply
+    // an alias instead. Both are file references, never text fallbacks.
     const type_output = try runScript(allocator,
         \\if (clipboard info) is {} then return "empty"
         \\if (clipboard info for «class furl») is not {} then return "file"
+        \\if (clipboard info for alias) is not {} then return "alias"
         \\if (clipboard info for «class PNGf») is not {} then return "PNG"
         \\if (clipboard info for JPEG picture) is not {} then return "JPEG"
         \\if (clipboard info for TIFF picture) is not {} then return "TIFF"
@@ -71,8 +94,8 @@ pub fn getContentWithConfig(allocator: std.mem.Allocator, cfg: config.Config) !C
     defer allocator.free(type_output);
     const format = scriptValue(type_output);
     if (std.mem.eql(u8, format, "empty")) return error.NoClipboardContent;
-    if (std.mem.eql(u8, format, "file")) {
-        const file_output = try runScript(allocator, "return POSIX path of (get the clipboard as «class furl»)", cfg.max_fetch_size);
+    if (std.mem.eql(u8, format, "file") or std.mem.eql(u8, format, "alias")) {
+        const file_output = try runScript(allocator, fileCaptureScript(format), cfg.max_fetch_size);
         defer allocator.free(file_output);
         const path = scriptValue(file_output);
         if (path.len > cfg.max_content_size) return error.ContentTooLarge;
@@ -94,6 +117,13 @@ pub fn getContentWithConfig(allocator: std.mem.Allocator, cfg: config.Config) !C
     const text_output = try runScript(allocator, "get the clipboard as text", cfg.max_fetch_size);
     defer allocator.free(text_output);
     return capturedText(allocator, text_output, cfg.max_content_size);
+}
+
+fn fileCaptureScript(format: []const u8) []const u8 {
+    return if (std.mem.eql(u8, format, "alias"))
+        "return POSIX path of (get the clipboard as alias)"
+    else
+        "return POSIX path of (get the clipboard as «class furl»)";
 }
 
 fn capturedText(allocator: std.mem.Allocator, output: []const u8, max_content_size: usize) !ClipboardContent {
@@ -196,7 +226,7 @@ pub fn setContentWithType(allocator: std.mem.Allocator, content: []const u8, ent
     });
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
-    try checkRestoreResult(result.term, result.stdout);
+    checkRestoreResult(result.term, result.stdout) catch return scriptFailure("restore", result.stderr);
 }
 
 fn isUrl(content: []const u8) bool {
@@ -241,6 +271,24 @@ test "restore requires both normal exit and explicit success" {
     try std.testing.expectError(error.CommandFailed, checkRestoreResult(.{ .Signal = 9 }, "success\n"));
     try std.testing.expectError(error.CommandFailed, checkExit(.{ .Stopped = 19 }));
     try std.testing.expectError(error.CommandFailed, checkExit(.{ .Unknown = 1 }));
+}
+
+test "script diagnostics extract error codes without exposing clipboard contents" {
+    try std.testing.expectEqual(@as(?i32, -1700), scriptErrorNumber("execution error: private data (-1700)\n"));
+    try std.testing.expectEqual(@as(?i32, -1743), scriptErrorNumber("not authorized (-1743)\n"));
+    try std.testing.expectEqual(@as(?i32, null), scriptErrorNumber("no numeric code"));
+    try std.testing.expectEqual(@as(?i32, null), scriptErrorNumber("invalid (private data)"));
+}
+
+test "file capture understands Finder URLs and restored AppleScript aliases" {
+    try std.testing.expectEqualStrings(
+        "return POSIX path of (get the clipboard as «class furl»)",
+        fileCaptureScript("file"),
+    );
+    try std.testing.expectEqualStrings(
+        "return POSIX path of (get the clipboard as alias)",
+        fileCaptureScript("alias"),
+    );
 }
 
 test "typed restore scripts escape paths and never fall back to text" {

@@ -54,6 +54,8 @@ Clipz lives in the menu bar. Click the clipboard icon or press **Command+Option+
   warning is shown. Unknown future history versions are left untouched and stop
   backend startup. Back up the files before attempting manual recovery.
 - Backend startup, connection, and command errors appear in the popover.
+  Capture and restore errors identify the failed operation and clear after a
+  successful retry of that operation. Unrelated save/recovery warnings stay visible.
   **Dismiss** clears the message; **Restart backend** reconnects after stopping
   the previous process. For save failures, resolve disk-space/permission problems
   before restarting so pending changes can be flushed.
