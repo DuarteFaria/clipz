@@ -29,10 +29,11 @@ pub fn main() !void {
             try clipboard_ui.run();
         },
         .json_api => {
-            // JSON API mode for Electron communication
+            // JSON API mode for the native frontend.
             try runJsonApi(allocator, &clipboard_manager);
         },
     }
+    try clipboard_manager.shutdown();
 }
 
 const RunMode = enum {
@@ -87,7 +88,7 @@ fn printUsage() void {
         \\
         \\Mode Options:
         \\  -c, --cli       Run in CLI mode (default)
-        \\  -j, --json-api  Run in JSON API mode for Electron integration
+        \\  -j, --json-api  Run in JSON API mode for the native frontend
         \\
         \\Performance Options:
         \\  -l, --low-power     Low power mode (slower polling, longer saves)
@@ -109,7 +110,7 @@ fn printUsage() void {
         \\  - Balanced:  100ms-250ms polling, 5s saves (default)
         \\  - Responsive: 50ms-150ms polling, 2s saves (fastest response)
         \\
-        \\Note: For global hotkeys, use the Electron frontend with 'npm start'
+        \\Note: For global hotkeys, use the native frontend with 'cargo run -p clipz-gpui'
         \\
     , .{});
 }
@@ -120,19 +121,68 @@ fn sendEntriesCallback(manager_ptr: *manager.ClipboardManager) void {
     sendClipboardEntries(allocator, stdout, manager_ptr) catch {};
 }
 
-// NEW: JSON API mode for Electron communication
+fn errorMessage(err: anyerror) []const u8 {
+    return switch (err) {
+        error.InvalidIndex => "This history entry no longer exists. Refresh and try again.",
+        error.HistorySaveFailed => "History could not be saved. Changes remain pending; check disk space and permissions.",
+        error.CorruptHistoryRecovered => "Damaged history was preserved in a .corrupt backup next to the history file. A new history has been started.",
+        error.ContentTooLarge => "Clipboard content is too large to store.",
+        error.FileNotFound => "The clipboard file or image is missing and could not be restored.",
+        error.NoClipboardContent => "No supported clipboard content is available.",
+        error.ClipboardPermissionDenied => "macOS denied clipboard access. Check Privacy & Security permissions for Clipz or your terminal.",
+        error.ClipboardCoercionFailed => "macOS could not convert the clipboard data to the requested type (AppleScript -1700).",
+        error.CommandFailed => "The macOS clipboard command failed. The terminal log includes the AppleScript error code.",
+        error.ClipboardWriteFailed => "macOS rejected the file URL clipboard write. Try copying the file again.",
+        error.AccessDenied => "Access to the file was denied. Check its permissions and macOS Privacy & Security settings.",
+        else => "Clipboard operation failed. Check that the file or image still exists and try again.",
+    };
+}
+
+const ErrorSource = enum { capture, restore, persistence, recovery };
+
+fn backgroundErrorSource(err: anyerror) ErrorSource {
+    return switch (err) {
+        error.HistorySaveFailed => .persistence,
+        error.CorruptHistoryRecovered => .recovery,
+        else => .capture,
+    };
+}
+
+fn sendError(stdout: std.fs.File, err: anyerror, source: ErrorSource) !void {
+    // Messages are fixed literals, never clipboard content or unescaped OS text.
+    try stdout.writeAll("{\"type\":\"error\",\"source\":\"");
+    try stdout.writeAll(@tagName(source));
+    try stdout.writeAll("\",\"message\":\"");
+    try stdout.writeAll(switch (source) {
+        .capture => "Could not capture the clipboard. ",
+        .restore => "Could not copy the selected entry. ",
+        else => "",
+    });
+    try stdout.writeAll(errorMessage(err));
+    try stdout.writeAll("\"}\n");
+}
+
+fn sendErrorCallback(_: *manager.ClipboardManager, err: anyerror) void {
+    sendError(std.fs.File.stdout(), err, backgroundErrorSource(err)) catch {};
+}
+
+fn sendCaptureRecoveredCallback(_: *manager.ClipboardManager) void {
+    std.fs.File.stdout().writeAll("{\"type\":\"error-resolved\",\"source\":\"capture\"}\n") catch {};
+}
+
 fn runJsonApi(allocator: std.mem.Allocator, clipboard_manager: *manager.ClipboardManager) !void {
     clipboard_manager.entries_changed_callback = sendEntriesCallback;
-
-    // Start clipboard monitoring in background
-    try clipboard_manager.startMonitoring();
-    defer clipboard_manager.stopMonitoring();
+    clipboard_manager.error_callback = sendErrorCallback;
+    clipboard_manager.capture_recovered_callback = sendCaptureRecoveredCallback;
 
     const stdin = std.fs.File.stdin();
     const stdout = std.fs.File.stdout();
 
-    // Send ready signal with capability flags for frontend compatibility
+    // Ready must be the first frame, before the monitor can write to stdout.
     try stdout.writeAll("{\"type\":\"ready\",\"supportsIdCommands\":true}\n");
+    if (clipboard_manager.takePendingError()) |err| try sendError(stdout, err, backgroundErrorSource(err));
+    try clipboard_manager.startMonitoring();
+    defer clipboard_manager.stopMonitoring();
 
     var buffer: [1024]u8 = undefined;
     while (true) {
@@ -154,10 +204,10 @@ fn runJsonApi(allocator: std.mem.Allocator, clipboard_manager: *manager.Clipboar
             } else if (std.mem.startsWith(u8, trimmed, "select-entry-id:")) {
                 const id_str = trimmed["select-entry-id:".len..];
                 if (std.fmt.parseInt(u64, id_str, 10)) |entry_id| {
-                    clipboard_manager.selectEntryById(entry_id) catch {
+                    clipboard_manager.selectEntryById(entry_id) catch |err| {
                         clipboard_manager.stdout_mutex.lock();
                         defer clipboard_manager.stdout_mutex.unlock();
-                        try stdout.writeAll("{\"type\":\"error\",\"message\":\"Invalid id\"}\n");
+                        try sendError(stdout, err, .restore);
                         continue;
                     };
                     clipboard_manager.stdout_mutex.lock();
@@ -172,10 +222,10 @@ fn runJsonApi(allocator: std.mem.Allocator, clipboard_manager: *manager.Clipboar
             } else if (std.mem.startsWith(u8, trimmed, "select-entry:")) {
                 const index_str = trimmed["select-entry:".len..];
                 if (std.fmt.parseInt(usize, index_str, 10)) |index| {
-                    clipboard_manager.selectEntry(index) catch {
+                    clipboard_manager.selectEntry(index) catch |err| {
                         clipboard_manager.stdout_mutex.lock();
                         defer clipboard_manager.stdout_mutex.unlock();
-                        try stdout.writeAll("{\"type\":\"error\",\"message\":\"Invalid index\"}\n");
+                        try sendError(stdout, err, .restore);
                         continue;
                     };
                     clipboard_manager.stdout_mutex.lock();
@@ -269,6 +319,7 @@ fn runJsonApi(allocator: std.mem.Allocator, clipboard_manager: *manager.Clipboar
                 clipboard_manager.stdout_mutex.lock();
                 defer clipboard_manager.stdout_mutex.unlock();
                 try stdout.writeAll("{\"type\":\"success\",\"message\":\"History cleared\"}\n");
+                try sendClipboardEntries(allocator, stdout, clipboard_manager);
             } else {
                 clipboard_manager.stdout_mutex.lock();
                 defer clipboard_manager.stdout_mutex.unlock();
@@ -297,6 +348,7 @@ fn appendJsonEscapedString(allocator: std.mem.Allocator, output: *std.ArrayList(
 }
 
 fn sendClipboardEntries(allocator: std.mem.Allocator, stdout: std.fs.File, clipboard_manager: *manager.ClipboardManager) !void {
+    if (clipboard_manager.takePendingError()) |err| try sendError(stdout, err, backgroundErrorSource(err));
     var snapshot = try clipboard_manager.snapshotDisplayEntries(allocator);
     defer manager.ClipboardManager.freeDisplayEntriesSnapshot(allocator, &snapshot);
 

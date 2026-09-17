@@ -32,7 +32,7 @@ pub fn build(b: *std.Build) void {
 
     // ── Test step ─────────────────────────────────────────────────────────────
     const test_mod = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
+        .root_source_file = b.path("src/tests.zig"),
         .target = target,
         .optimize = optimize,
     });
