@@ -3,6 +3,8 @@
 
 No test reads or writes the user's clipboard contents or real history. Native
 change-count polling still runs, but every AppleScript operation is intercepted.
+Native file restoration is tested separately on isolated pasteboards in
+src/pasteboard.zig; this harness must not select existing file entries.
 """
 
 import json
@@ -160,24 +162,19 @@ class JsonApiTests(unittest.TestCase):
         self.assertIn("missing", failure["message"])
         self.quit()
 
-    def test_file_selection_is_recaptured_as_alias_without_false_error(self):
+    def test_legacy_alias_capture_retains_file_identity_without_false_error(self):
         (self.home / "teachers.csv").write_text("test file\n")
-        self.start("file")
-        first = self.wait_for(lambda m: m["type"] in ("entries", "error"))
-        self.assertEqual(first["type"], "entries")
-        entry = first["data"][0]
-        self.assertEqual(entry["type"], "file")
-        self.send(f"select-entry-id:{entry['id']}")
-        selected = self.wait_for(lambda m: m["type"] in ("select-success", "error"))
-        self.assertEqual(selected["type"], "select-success")
-        self.quit()
-
-        # The restored clipboard advertises alias, not Finder's file URL.
+        self.seed([self.entry(1, str(self.home / "teachers.csv"), "file")])
+        # Aliases from other apps/older Clipz versions remain readable. File
+        # restoration now uses native URLs and is tested on isolated pasteboards
+        # in Zig, never by writing to the general clipboard in this harness.
+        (self.home / "alias-restored").touch()
         self.start("file")
         recaptured = self.wait_for(lambda m: m["type"] in ("entries", "error"))
         self.assertEqual(recaptured["type"], "entries")
         self.assertEqual(len(recaptured["data"]), 1)
-        self.assertEqual(recaptured["data"][0]["id"], entry["id"])
+        self.assertEqual(recaptured["data"][0]["id"], 1)
+        self.assertEqual(recaptured["data"][0]["type"], "file")
         self.assertTrue(recaptured["data"][0]["isCurrent"])
         self.quit()
 

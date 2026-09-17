@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const config = @import("config.zig");
 const image_storage = @import("image_storage.zig");
+const pasteboard = @import("pasteboard.zig");
 
 pub const ClipboardError = error{
     CommandFailed,
@@ -80,8 +81,8 @@ pub fn getContentWithConfig(allocator: std.mem.Allocator, cfg: config.Config) !C
     if (builtin.os.tag != .macos) return error.UnsupportedPlatform;
 
     // Inspect advertised representations instead of coercing arbitrary text to
-    // a file URL. Finder supplies file URLs; AppleScript restoration can supply
-    // an alias instead. Both are file references, never text fallbacks.
+    // a file URL. Finder and native restoration supply file URLs; older Clipz
+    // versions/other apps can supply aliases. Neither is a text fallback.
     const type_output = try runScript(allocator,
         \\if (clipboard info) is {} then return "empty"
         \\if (clipboard info for «class furl») is not {} then return "file"
@@ -182,7 +183,8 @@ fn validateAsset(path: []const u8, entry_type: ClipboardType) !void {
 }
 
 fn buildRestoreScript(allocator: std.mem.Allocator, content: []const u8, entry_type: ClipboardType) ![]const u8 {
-    if ((entry_type == .image or entry_type == .file) and !validateFilePath(content))
+    if (entry_type == .file) return error.NativeFileRestoreRequired;
+    if (entry_type == .image and !validateFilePath(content))
         return error.InvalidPath;
     const escaped = try escapeAppleScriptString(allocator, content);
     defer allocator.free(escaped);
@@ -192,10 +194,7 @@ fn buildRestoreScript(allocator: std.mem.Allocator, content: []const u8, entry_t
             \\set the clipboard to "{s}"
             \\return "success"
         , .{escaped}),
-        .file => std.fmt.allocPrint(allocator,
-            \\set the clipboard to (POSIX file "{s}" as alias)
-            \\return "success"
-        , .{escaped}),
+        .file => unreachable,
         .image => std.fmt.allocPrint(allocator,
             \\set imgFile to POSIX file "{s}"
             \\set the clipboard to (read imgFile as {s})
@@ -218,6 +217,7 @@ pub fn setContentWithType(allocator: std.mem.Allocator, content: []const u8, ent
     if (builtin.os.tag != .macos) return error.UnsupportedPlatform;
     // The stored type is authoritative, even for paths in managed image storage.
     if (entry_type == .image or entry_type == .file) try validateAsset(content, entry_type);
+    if (entry_type == .file) return pasteboard.setFilePath(content);
     const script = try buildRestoreScript(allocator, content, entry_type);
     defer allocator.free(script);
     const result = try std.process.Child.run(.{
@@ -293,19 +293,17 @@ test "file capture understands Finder URLs and restored AppleScript aliases" {
 
 test "typed restore scripts escape paths and never fall back to text" {
     const allocator = std.testing.allocator;
-    for ([_]ClipboardType{ .text, .url, .color, .file, .image }) |entry_type| {
+    for ([_]ClipboardType{ .text, .url, .color, .image }) |entry_type| {
         const script = try buildRestoreScript(allocator, "/tmp/a\"b\\c\n.png", entry_type);
         defer allocator.free(script);
         try std.testing.expect(std.mem.indexOf(u8, script, "/tmp/a\\\"b\\\\c\\n.png") != null);
         try std.testing.expect(std.mem.endsWith(u8, script, "return \"success\""));
         try std.testing.expect(std.mem.indexOf(u8, script, "on error") == null);
-        if (entry_type == .file or entry_type == .image)
+        if (entry_type == .image)
             try std.testing.expect(std.mem.indexOf(u8, script, "set the clipboard to \"") == null);
-        if (entry_type == .file)
-            try std.testing.expect(std.mem.indexOf(u8, script, "as alias") != null);
     }
     try std.testing.expectError(error.InvalidPath, buildRestoreScript(allocator, "[📸 PNG Screenshot]", .image));
-    try std.testing.expectError(error.InvalidPath, buildRestoreScript(allocator, "no_file", .file));
+    try std.testing.expectError(error.NativeFileRestoreRequired, buildRestoreScript(allocator, "/tmp/teachers.csv", .file));
 }
 
 test "capture preserves text url color and distinguishes oversized from empty" {

@@ -70,8 +70,8 @@ stdout mutex. Diagnostics belong on stderr, never on the protocol stream.
 ### Zig Backend Modules
 - `main.zig` — arg parsing, CLI mode entry, JSON API event loop
 - `manager.zig` (`ClipboardManager`) — history identity/recency, pins, capture retries, batched persistence, deferred image deletion, background monitor
-- `clipboard.zig` — typed macOS capture/restore via `osascript`; no fake image/file labels or successful text fallbacks
-- `pasteboard.zig` — native NSPasteboard change count
+- `clipboard.zig` — typed macOS capture/restore; AppleScript for text/images and native file restoration, with no fake labels or successful text fallbacks
+- `pasteboard.zig` — native NSPasteboard change count and file URL restoration
 - `config.zig` — polling intervals and limits for three profiles (default/balanced, lowPower, responsive)
 - `persistence.zig` — JSON v4 history, atomic saves, legacy loading/migration, corrupt-history quarantine
 - `image_storage.zig` — private durable images, complete byte comparison, safely scoped deletion
@@ -80,10 +80,13 @@ stdout mutex. Diagnostics belong on stderr, never on the protocol stream.
 
 ### Clipboard Type Handling
 Capture inspects advertised clipboard representations: file URL or AppleScript
-alias (including Clipz-restored files), PNG/JPEG/TIFF,
+alias (including legacy Clipz-restored files), PNG/JPEG/TIFF,
 then text (classified further as URL/color). Images are copied to durable storage.
 The stored type is authoritative during restoration. Failed asset reads and
 oversized content are errors, not placeholder entries.
+File restoration writes an `NSURL` with `NSPasteboard.writeObjects`, advertising
+`public.file-url` for Finder-compatible paste; never write a filename or alias
+as a substitute for a file URL.
 
 ### Rust Frontend (`gpui-app/src/main.rs`)
 - `BackendHandle` — owns the child process, pumps commands and messages on separate threads via `mpsc` channels
@@ -116,4 +119,6 @@ the dirty flag and pending deletions. Shutdown flushes changes before exiting.
 Tests must not use the real clipboard or HOME history. Use `ClipboardAccess`,
 `initWithPersistencePath`, and `ImageStore.root` with temporary directories. The
 JSON API integration harness substitutes `osascript`. Native pasteboard I/O and
-event-driven frontend dispatch are deliberately deferred to milestone 3.
+event-driven frontend dispatch are mostly deferred to milestone 3. File URL
+restoration is already native for correctness, with tests on unique pasteboards
+that never modify the general clipboard.

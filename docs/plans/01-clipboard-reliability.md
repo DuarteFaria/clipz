@@ -60,25 +60,30 @@ Clipz captures, restores, and retains the right content, and makes failures visi
 - A damaged history file is quarantined before starting an empty history.
 - Restart/Quit wait for normal backend exit off the UI thread, with a two-second
   forced-termination fallback. That fallback cannot guarantee unsaved data.
-- Keyboard/search work and the native pasteboard/event-driven refactor remain
-  in PR 2 and PR 3.
+- Keyboard/search work and the broader native pasteboard/event-driven refactor
+  remain in PR 2 and PR 3. File restoration alone is native now, because an
+  AppleScript alias is not a reliable Finder-compatible file clipboard.
 
 ## Local verification
 
-- `zig build test --summary all`: 28 tests passed.
+- `zig build test --summary all`: 30 tests passed.
 - `python3 scripts/test-json-api.py`: 8 tests passed.
 - `cargo test --locked -p clipz-gpui`: 14 tests passed.
 - `zig build` and `cargo build --locked -p clipz-gpui`: passed.
 - Zig/Rust formatting and `git diff --check`: passed.
-- Five AppleScript templates compiled with `osacompile` without execution.
+- AppleScript capture/restore templates compiled with `osacompile` without execution;
+  the file-restore script has since been replaced by native file URL writing.
 
 Tests use injected clipboards, isolated history/image directories, and fake
 processes. The protocol harness runs the real backend with fake AppleScript I/O
 and verifies startup capture, failure frames, corrupt-history recovery, pending
 shutdown saves, and image persistence/deduplication across restart.
 
-File-selection follow-up: capture now recognizes both Finder file URLs and the
-AppleScript alias representation written by file restoration. Protocol errors
+File-selection follow-up: capture recognizes both Finder file URLs and legacy
+AppleScript alias representations. File restoration now writes native `NSURL`
+objects and is verified on isolated macOS pasteboards through file → text → file,
+including special/Unicode filenames and folders. Missing-file validation leaves
+the existing pasteboard unchanged. Protocol errors
 identify capture versus restore, and successful retries clear only the matching
 transient warning. Tests cover restored-alias recapture and capture recovery;
 the reported real Finder workflow still needs a user recheck.

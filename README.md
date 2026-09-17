@@ -65,7 +65,9 @@ Clipz lives in the menu bar. Click the clipboard icon or press **Command+Option+
 
 History is local but **not encrypted**. Do not treat clipboard history as a secure
 store for passwords or tokens. Files copied from Finder remain references to the
-original file; Clipz does not back up those files.
+original file; Clipz does not back up those files. Selecting a file writes a native
+file URL so file-aware apps such as Finder can paste the file, not just its name.
+Text-only destinations may still display a textual representation of a file.
 
 ## Build from Source
 
@@ -92,7 +94,9 @@ cargo test --locked -p clipz-gpui
 an injected clipboard and temporary history/image directories. The JSON API
 tests run the real backend with isolated `HOME` and fake `osascript`; they never
 read or change the user's clipboard contents. Frontend lifecycle tests use fake
-child processes. Pull-request CI runs these tests and builds both components.
+child processes. Native file-restoration tests exercise file → text → file and
+folder restoration on unique, isolated macOS pasteboards (not the general
+clipboard). Pull-request CI runs these tests and builds both components.
 
 ### CLI mode
 

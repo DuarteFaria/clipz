@@ -132,6 +132,7 @@ fn errorMessage(err: anyerror) []const u8 {
         error.ClipboardPermissionDenied => "macOS denied clipboard access. Check Privacy & Security permissions for Clipz or your terminal.",
         error.ClipboardCoercionFailed => "macOS could not convert the clipboard data to the requested type (AppleScript -1700).",
         error.CommandFailed => "The macOS clipboard command failed. The terminal log includes the AppleScript error code.",
+        error.ClipboardWriteFailed => "macOS rejected the file URL clipboard write. Try copying the file again.",
         error.AccessDenied => "Access to the file was denied. Check its permissions and macOS Privacy & Security settings.",
         else => "Clipboard operation failed. Check that the file or image still exists and try again.",
     };

@@ -4,6 +4,7 @@ test {
     _ = @import("manager.zig");
     _ = @import("clipboard.zig");
     _ = @import("image_storage.zig");
+    _ = @import("pasteboard.zig");
     _ = @import("persistence.zig");
     _ = @import("main.zig");
 }
