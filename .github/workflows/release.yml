@@ -37,8 +37,10 @@ jobs:
           restore-keys: |
             zig-${{ runner.os }}-
 
-      - name: Install Homebrew dependencies
-        run: brew install sdl2 sdl2_ttf
+      - name: Run regression tests
+        run: |
+          zig build test --summary all
+          cargo test --locked -p clipz-gpui
 
       - name: Build Clipz.app and Clipz.dmg
         run: ./scripts/build-app.sh

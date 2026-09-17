@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - name: Check Zig formatting
+        run: zig fmt --check build.zig src/
+      - name: Test and build backend
+        run: |
+          zig build test --summary all
+          zig build
+          python3 scripts/test-json-api.py
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Test and build frontend
+        run: |
+          cargo test --locked -p clipz-gpui
+          cargo build --locked -p clipz-gpui

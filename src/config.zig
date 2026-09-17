@@ -15,7 +15,7 @@ pub const Config = struct {
     max_fetch_size: usize = 512 * 1024, // 512KB maximum fetch from system
 
     // History settings
-    max_entries: usize = 10, // Maximum clipboard entries to keep
+    max_entries: usize = 10, // Rolling unpinned history budget; pinned entries are retained separately
 
     pub fn default() Config {
         return Config{};
