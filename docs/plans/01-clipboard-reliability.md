@@ -2,8 +2,9 @@
 
 ## Status
 
-Planning only; implementation has not started. Keep this PR in draft until its
-scope is implemented and its acceptance criteria are verified.
+Implementation is in progress on `plan/clipboard-reliability`. Automated backend,
+protocol, and frontend tests pass locally. Keep this PR in draft until CI and the
+manual macOS checks below have been reviewed.
 
 This is milestone 1 of 3. Merge before milestone 2 (keyboard navigation and
 search), then milestone 3 (runtime overhead and ownership).
@@ -34,17 +35,51 @@ Clipz captures, restores, and retains the right content, and makes failures visi
 
 ## Acceptance criteria
 
-- [ ] A → B → A correctly makes A current without changing its identity.
-- [ ] Startup captures the existing clipboard.
-- [ ] Transient capture failures are retried without losing the pending change.
-- [ ] Pinned entries cannot silently disable new captures.
-- [ ] Distinct images cannot be discarded because their prefixes match.
-- [ ] History and retained images survive restart.
-- [ ] Legacy image paths and missing assets are handled explicitly.
-- [ ] Failed saves remain pending; damaged history is not silently overwritten.
-- [ ] Persistence round-trips supported content, including control characters.
-- [ ] Clipboard restoration failures are reported accurately.
-- [ ] Backend failure is visible and recoverable.
-- [ ] Pending history survives normal application quit.
+- [x] A → B → A correctly makes A current without changing its identity.
+- [x] Startup captures the existing clipboard.
+- [x] Transient capture failures are retried without losing the pending change.
+- [x] Pinned entries cannot silently disable new captures.
+- [x] Distinct images cannot be discarded because their prefixes match.
+- [x] History and retained images survive restart.
+- [x] Legacy image paths and missing assets are handled explicitly.
+- [x] Failed saves remain pending; damaged history is not silently overwritten.
+- [x] Persistence round-trips supported content, including control characters.
+- [x] Clipboard restoration failures are reported accurately.
+- [x] Backend failure is surfaced with Restart backend and Dismiss actions.
+- [x] Pending history is flushed by the normal shutdown path.
 - [ ] CI actually executes the regression tests.
-- [ ] Architecture and protocol documentation reflect the implementation.
+- [x] Architecture and protocol documentation reflect the implementation.
+
+## Implementation decisions
+
+- `max_entries` bounds unpinned history; pins are retained separately.
+- Current clipboard identity is explicit and unknown until capture succeeds.
+- Images are removed only after the history update is durable.
+- Legacy image files are copied, not moved or deleted. Known PNG/JPEG/TIFF
+  signatures correct legacy extension mismatches during migration.
+- A damaged history file is quarantined before starting an empty history.
+- Restart/Quit wait for normal backend exit off the UI thread, with a two-second
+  forced-termination fallback. That fallback cannot guarantee unsaved data.
+- Keyboard/search work and the native pasteboard/event-driven refactor remain
+  in PR 2 and PR 3.
+
+## Local verification
+
+- `zig build test --summary all`: 26 tests passed.
+- `python3 scripts/test-json-api.py`: 6 tests passed.
+- `cargo test --locked -p clipz-gpui`: 12 tests passed.
+- `zig build` and `cargo build --locked -p clipz-gpui`: passed.
+- Zig/Rust formatting and `git diff --check`: passed.
+- Five AppleScript templates compiled with `osacompile` without execution.
+
+Tests use injected clipboards, isolated history/image directories, and fake
+processes. The protocol harness runs the real backend with fake AppleScript I/O
+and verifies startup capture, failure frames, corrupt-history recovery, pending
+shutdown saves, and image persistence/deduplication across restart.
+
+## Manual macOS checks still required
+
+- [ ] Copy and restore real text, Finder files/folders, and PNG/JPEG/TIFF images.
+- [ ] Verify the error banner, Dismiss, and Restart backend in the actual popover.
+- [ ] Quit through the menu, relaunch, and confirm the most recent history and
+  images are present.
