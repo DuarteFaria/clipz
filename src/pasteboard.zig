@@ -1,6 +1,5 @@
 /// NSPasteboard.generalPasteboard.changeCount via Objective-C runtime.
 /// Near-zero-cost clipboard change detection without spawning any process.
-
 const c = struct {
     const Class = *opaque {};
     const SEL = *opaque {};
